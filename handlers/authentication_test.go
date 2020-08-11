@@ -116,7 +116,7 @@ func TestStrategyTokenInvalidSignature(t *testing.T) {
 
 	// This `tokenString` should be valid for Kiali server because we generated
 	// it using the right functions. It's also already signed.
-	tokenString, err := config.GetSignedTokenString(tokenClaims)
+	tokenString, _ := config.GetSignedTokenString(tokenClaims)
 
 	// Let's create a hacked token with a mutated payload. The header and signature of the
 	// token will be kept unchanged.
@@ -388,7 +388,6 @@ func TestLogout(t *testing.T) {
 	assert.True(t, cookie.Expires.Before(clockTime))
 }
 
-
 func mockK8s(reject bool) {
 	k8s := kubetest.NewK8SClientMock()
 	prom := new(prometheustest.PromClientMock)
@@ -396,7 +395,7 @@ func mockK8s(reject bool) {
 	mockClientFactory := kubetest.NewK8SClientFactoryMock(k8s)
 	business.SetWithBackends(mockClientFactory, prom)
 
-	if (reject) {
+	if reject {
 		k8s.On("GetProjects", mock.AnythingOfType("string")).Return([]osproject_v1.Project{}, fmt.Errorf("Rejecting"))
 	} else {
 		k8s.On("GetProjects", mock.AnythingOfType("string")).Return([]osproject_v1.Project{
