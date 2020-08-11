@@ -467,14 +467,6 @@ func Set(conf *Config) {
 	configuration = *conf
 }
 
-func getDefaultStringFromFile(filename string, defaultValue string) (retVal string) {
-	if fileContents, err := ioutil.ReadFile(filename); err == nil {
-		retVal = string(fileContents)
-	} else {
-		retVal = defaultValue
-	}
-	return
-}
 
 // String marshals the given Config into a YAML string
 // WARNING: do NOT use the result of this function to retrieve any configuration: some fields are obfuscated for security reasons.
