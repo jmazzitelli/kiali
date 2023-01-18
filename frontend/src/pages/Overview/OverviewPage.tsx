@@ -664,7 +664,11 @@ export class OverviewPage extends React.Component<OverviewProps, State> {
     // RBAC allow more fine granularity but Kiali won't check that in detail.
 
     if (serverConfig.istioNamespace !== nsInfo.name) {
-      if (serverConfig.kialiFeatureFlags.istioInjectionAction && !serverConfig.kialiFeatureFlags.istioUpgradeAction) {
+      if (
+        !this.props.isMaistra &&
+        serverConfig.kialiFeatureFlags.istioInjectionAction &&
+        !serverConfig.kialiFeatureFlags.istioUpgradeAction
+      ) {
         namespaceActions.push({
           isGroup: false,
           isSeparator: true
@@ -693,30 +697,23 @@ export class OverviewPage extends React.Component<OverviewProps, State> {
           action: (ns: string) =>
             this.setState({ showTrafficPoliciesModal: true, nsTarget: ns, opTarget: 'remove', kind: 'injection' })
         };
-        if (!this.props.isMaistra) {
-          if (
-            nsInfo.labels &&
-            ((nsInfo.labels[serverConfig.istioLabels.injectionLabelName] &&
-              nsInfo.labels[serverConfig.istioLabels.injectionLabelName] === 'enabled') ||
-              nsInfo.labels[serverConfig.istioLabels.injectionLabelRev])
-          ) {
-            namespaceActions.push(disableAction);
-            namespaceActions.push(removeAction);
-          } else if (
-            nsInfo.labels &&
-            nsInfo.labels[serverConfig.istioLabels.injectionLabelName] &&
-            nsInfo.labels[serverConfig.istioLabels.injectionLabelName] === 'disabled'
-          ) {
-            namespaceActions.push(enableAction);
-            namespaceActions.push(removeAction);
-          } else {
-            namespaceActions.push(enableAction);
-          }
-          namespaceActions.push({
-            isGroup: false,
-            isSeparator: true,
-            isDisabled: false
-          });
+        if (
+          nsInfo.labels &&
+          ((nsInfo.labels[serverConfig.istioLabels.injectionLabelName] &&
+            nsInfo.labels[serverConfig.istioLabels.injectionLabelName] === 'enabled') ||
+            nsInfo.labels[serverConfig.istioLabels.injectionLabelRev])
+        ) {
+          namespaceActions.push(disableAction);
+          namespaceActions.push(removeAction);
+        } else if (
+          nsInfo.labels &&
+          nsInfo.labels[serverConfig.istioLabels.injectionLabelName] &&
+          nsInfo.labels[serverConfig.istioLabels.injectionLabelName] === 'disabled'
+        ) {
+          namespaceActions.push(enableAction);
+          namespaceActions.push(removeAction);
+        } else {
+          namespaceActions.push(enableAction);
         }
       }
 
@@ -751,22 +748,15 @@ export class OverviewPage extends React.Component<OverviewProps, State> {
               nsInfo.labels[serverConfig.istioLabels.injectionLabelName] === 'enabled'))
         ) {
           namespaceActions.push(upgradeAction);
-          namespaceActions.push({
-            isGroup: false,
-            isSeparator: true
-          });
         } else if (
           nsInfo.labels &&
           nsInfo.labels[serverConfig.istioLabels.injectionLabelRev] &&
           nsInfo.labels[serverConfig.istioLabels.injectionLabelRev] === serverConfig.istioCanaryRevision.upgrade
         ) {
           namespaceActions.push(downgradeAction);
-          namespaceActions.push({
-            isGroup: false,
-            isSeparator: true
-          });
         }
       }
+
       const aps = nsInfo.istioConfig?.authorizationPolicies || [];
       const addAuthorizationAction = {
         isGroup: false,
@@ -789,10 +779,14 @@ export class OverviewPage extends React.Component<OverviewProps, State> {
           this.setState({ opTarget: 'delete', nsTarget: ns, showTrafficPoliciesModal: true, kind: 'policy' })
       };
       if (this.props.istioAPIEnabled) {
+        namespaceActions.push({
+          isGroup: false,
+          isSeparator: true
+        });
         namespaceActions.push(addAuthorizationAction);
-      }
-      if (aps.length > 0 && this.props.istioAPIEnabled) {
-        namespaceActions.push(removeAuthorizationAction);
+        if (aps.length > 0) {
+          namespaceActions.push(removeAuthorizationAction);
+        }
       }
     } else if (this.state.grafanaLinks.length > 0) {
       // Istio namespace will render external Grafana dashboards
