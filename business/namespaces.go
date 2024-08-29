@@ -162,6 +162,11 @@ func (in *NamespaceService) getNamespacesByCluster(ctx context.Context, cluster 
 
 	var namespaces []models.Namespace
 
+	mesh, ok := in.kialiCache.GetMesh()
+	if !ok {
+		log.Debugf("Cannot obtain mesh details for cluster [%v]; will not be able to filter on Istio discovery selectors if they exist", cluster)
+	}
+
 	// If we are running in OpenShift, we will use the project names since these are the list of accessible namespaces
 	if in.hasProjects {
 		projects, err := in.userClients[cluster].GetProjects(ctx, "")
@@ -215,7 +220,7 @@ func (in *NamespaceService) getNamespacesByCluster(ctx context.Context, cluster 
 		}
 	}
 
-	namespaces = filterNamespacesWithDiscoverySelectors(namespaces, getDiscoverySelectorsForCluster(cluster, in.conf))
+	namespaces = filterNamespacesWithDiscoverySelectors(namespaces, getDiscoverySelectorsForCluster(cluster, in.conf, mesh))
 
 	return namespaces, nil
 }
@@ -375,7 +380,11 @@ func (in *NamespaceService) getNamespacesUsingKialiSA(cluster string, labelSelec
 // This ignores cluster-wide-access mode since we can have discovery selectors even when given cluster wide access.
 // Also, this may be asking for the accessibility of a namespace in a remote cluster, in which case cluster-wide-access is moot.
 func (in *NamespaceService) isAccessibleNamespace(namespace models.Namespace) bool {
-	selectors := getDiscoverySelectorsForCluster(namespace.Cluster, in.conf)
+	mesh, ok := kialiCache.GetMesh()
+	if !ok {
+		log.Debugf("Cannot get Istio discovery selectors; ignoring when testing if namespace [%v] in cluster [%v] is accessible", namespace.Name, namespace.Cluster)
+	}
+	selectors := getDiscoverySelectorsForCluster(namespace.Cluster, in.conf, mesh)
 	// see if the discovery selectors match the one namespace we are checking
 	return len(filterNamespacesWithDiscoverySelectors([]models.Namespace{namespace}, selectors)) == 1
 }
