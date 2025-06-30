@@ -95,7 +95,7 @@ func NewServer(controlPlaneMonitor business.ControlPlaneMonitor,
 	// and ask for any profile to extend to those number of seconds you specify, which could be larger than 30s.
 	// To limit the damage this may cause with large write timeouts, we only increase the timeout to 1 minute.
 	writeTimeout := conf.Server.WriteTimeout * time.Second
-	if conf.Server.Profiler.Enabled && writeTimeout < 60 {
+	if conf.Server.Observability.Profiler.Enabled && writeTimeout < 60 {
 		writeTimeout = 1 * time.Minute
 	}
 

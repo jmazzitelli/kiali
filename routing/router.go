@@ -173,7 +173,7 @@ func NewRouter(
 	allRoutes := apiRoutes.Routes
 
 	// Add the Profiler handlers if enabled
-	if conf.Server.Profiler.Enabled {
+	if conf.Server.Observability.Profiler.Enabled {
 		zl.Info().Msgf("Profiler is enabled")
 		allRoutes = append(allRoutes,
 			Route{

@@ -85,7 +85,7 @@ func TestSimpleRoute(t *testing.T) {
 
 func TestProfilerRoute(t *testing.T) {
 	conf := new(config.Config)
-	conf.Server.Profiler.Enabled = true
+	conf.Server.Observability.Profiler.Enabled = true
 
 	mockClientFactory := kubetest.NewK8SClientFactoryMock(kubetest.NewFakeK8sClient())
 	router, _ := NewRouter(conf, nil, mockClientFactory, nil, nil, nil, nil, nil, filetest.StaticAssetDir(t))
@@ -117,7 +117,7 @@ func TestProfilerRoute(t *testing.T) {
 
 func TestDisabledProfilerRoute(t *testing.T) {
 	conf := new(config.Config)
-	conf.Server.Profiler.Enabled = false
+	conf.Server.Observability.Profiler.Enabled = false
 
 	mockClientFactory := kubetest.NewK8SClientFactoryMock(kubetest.NewFakeK8sClient())
 	router, _ := NewRouter(conf, nil, mockClientFactory, nil, nil, nil, nil, nil, filetest.StaticAssetDir(t))

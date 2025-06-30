@@ -249,11 +249,11 @@ setup_kind_singlecluster() {
     --set-string auth.openid.issuer_uri="${ISSUER_URI}" \
     --set auth.openid.insecure_skip_verify_tls="false" \
     --set auth.openid.username_claim="preferred_username" \
-    --set deployment.logger.log_level="trace" \
-    --set deployment.image_name=localhost/kiali/kiali \
-    --set deployment.image_version=dev \
-    --set deployment.image_pull_policy="Never" \
-    --set deployment.service_type="LoadBalancer" \
+    --set server.observability.logger.log_level="trace" \
+    --set deployment.image.name=localhost/kiali/kiali \
+    --set deployment.image.version=dev \
+    --set deployment.image.pull_policy="Never" \
+    --set deployment.service.type="LoadBalancer" \
     --set external_services.grafana.external_url="http://grafana.istio-system:3000" \
     --set external_services.grafana.dashboards[0].name="Istio Mesh Dashboard" \
     --set external_services.tracing.enabled="true" \
@@ -339,11 +339,11 @@ setup_kind_tempo() {
     --namespace istio-system \
     --wait \
     --set auth.strategy="${AUTH_STRATEGY}" \
-    --set deployment.logger.log_level="trace" \
-    --set deployment.image_name=localhost/kiali/kiali \
-    --set deployment.image_version=dev \
-    --set deployment.image_pull_policy="Never" \
-    --set deployment.service_type="LoadBalancer" \
+    --set server.observability.logger.log_level="trace" \
+    --set deployment.image.name=localhost/kiali/kiali \
+    --set deployment.image.version=dev \
+    --set deployment.image.pull_policy="Never" \
+    --set deployment.service.type="LoadBalancer" \
     --set external_services.grafana.external_url="http://grafana.istio-system:3000" \
     --set external_services.grafana.dashboards[0].name="Istio Mesh Dashboard" \
     --set external_services.tracing.enabled="true" \

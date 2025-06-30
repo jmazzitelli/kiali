@@ -252,10 +252,10 @@ install_kiali() {
     oc create secret docker-registry kiali-pull-creds --docker-username=iamapikey --docker-password="${token}" --docker-server="${cluster_repo}" -n istio-system
     oc get ns kiali-operator || oc create ns kiali-operator
     oc create secret docker-registry kiali-pull-creds --docker-username=iamapikey --docker-password="${token}" --docker-server="${cluster_repo}" -n kiali-operator
-    image_pull_secrets_field='image_pull_secrets: ["kiali-pull-creds"]'
+    image_pull_secrets_field='pull_secrets: ["kiali-pull-creds"]'
     operator_image_repo="${cluster_repo}/kiali/kiali-operator"
-    kiali_image_name_field="image_name: ${cluster_repo}/kiali/kiali"
-    kiali_image_version_field="image_version: ${KIALI_VERSION}"
+    kiali_image_name_field="name: ${cluster_repo}/kiali/kiali"
+    kiali_image_version_field="version: ${KIALI_VERSION}"
     helm_chart=${HELM_CHARTS_REPO}/_output/charts/kiali-operator-*-SNAPSHOT.tgz
   else
     additional_set=""
@@ -284,12 +284,11 @@ spec:
   auth:
     strategy: openshift
   deployment:
-    logger:
-      log_level: trace
-    ${kiali_image_version_field}
-    image_pull_policy: Always
-    ${image_pull_secrets_field}
-    ${kiali_image_name_field}
+    image:
+      ${kiali_image_name_field}
+      ${kiali_image_version_field}
+      pull_policy: Always
+      ${image_pull_secrets_field}
     accessible_namespaces:
       - "**"
     namespace: istio-system
@@ -305,6 +304,8 @@ spec:
   istio_namespace: istio-system
   server:
     observability:
+      logger:
+        log_level: trace
       tracing:
         enabled: true
 EOF

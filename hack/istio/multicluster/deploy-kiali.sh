@@ -94,9 +94,9 @@ deploy_kiali() {
       echo "Pushing the images into the cluster..."
       make -e -C "${KIALI_REPO_ROOT}" DORP="${DORP}" CLUSTER_TYPE="kind" KIND_NAME="${cluster_name}" cluster-push-kiali
       helm_args+=(
-        --set deployment.image_pull_policy="Never"
-        --set deployment.image_name="localhost/kiali/kiali"
-        --set deployment.image_version="dev"
+        --set deployment.image.pull_policy="Never"
+        --set deployment.image.name="localhost/kiali/kiali"
+        --set deployment.image.version="dev"
       )
     elif [ "${KIALI_AUTH_STRATEGY}" == "openshift" ]; then
       echo "Pushing the images into the cluster..."
@@ -106,9 +106,9 @@ deploy_kiali() {
       image_name="$(oc get image.config.openshift.io/cluster -o custom-columns=INT:.status.internalRegistryHostname --no-headers 2>/dev/null)/kiali/kiali"
       make -e -C "${KIALI_REPO_ROOT}" DORP="${DORP}" CLUSTER_TYPE="openshift" cluster-push-kiali
       helm_args+=(
-        --set deployment.image_pull_policy="Always"
-        --set deployment.image_name="${image_name}"
-        --set deployment.image_version="dev"
+        --set deployment.image.pull_policy="Always"
+        --set deployment.image.name="${image_name}"
+        --set deployment.image.version="dev"
       )
     else
       local image_to_tag="quay.io/kiali/kiali:dev"
@@ -118,8 +118,8 @@ deploy_kiali() {
       echo "Pushing the dev image [${image_to_push}] to the cluster [${cluster_name}]..."
       ${DORP} push --tls-verify=false ${image_to_push}
       helm_args+=(
-        --set deployment.image_name="localhost:5000/kiali/kiali"
-        --set deployment.image_version="dev"
+        --set deployment.image.name="localhost:5000/kiali/kiali"
+        --set deployment.image.version="dev"
       )
     fi
   fi
@@ -197,9 +197,9 @@ deploy_kiali() {
   helm upgrade --install \
     "${helm_args[@]}" \
     --namespace "${ISTIO_NAMESPACE}" \
-    --set deployment.logger.log_level="trace" \
+    --set server.observability.logger.log_level="trace" \
     --set deployment.ingress.enabled="${ingress_enabled}" \
-    --set deployment.service_type="${service_type}" \
+    --set deployment.service.type="${service_type}" \
     --set server.web_port="${web_port}" \
     kiali-server \
     "${KIALI_SERVER_HELM_CHARTS}"

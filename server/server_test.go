@@ -199,7 +199,7 @@ func TestSecureComm(t *testing.T) {
 	conf.Server.Port = testPort
 	conf.Server.Observability.Metrics.Enabled = true
 	conf.Server.Observability.Metrics.Port = testMetricsPort
-	conf.Server.Profiler.Enabled = true
+	conf.Server.Observability.Profiler.Enabled = true
 	conf.Auth.Strategy = "anonymous"
 	util.Clock = util.RealClock{}
 

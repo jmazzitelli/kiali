@@ -182,8 +182,9 @@ type Tracing struct {
 
 // Observability provides configuration for tracing and metrics exported by the Kiali server.
 type Observability struct {
-	Metrics Metrics `yaml:"metrics,omitempty"`
-	Tracing Tracing `yaml:"tracing,omitempty"`
+	Metrics  Metrics  `yaml:"metrics,omitempty"`
+	Profiler Profiler `yaml:"profiler,omitempty"`
+	Tracing  Tracing  `yaml:"tracing,omitempty"`
 }
 
 // Server configuration
@@ -194,7 +195,6 @@ type Server struct {
 	GzipEnabled    bool          `yaml:"gzip_enabled,omitempty"`
 	Observability  Observability `yaml:"observability,omitempty"`
 	Port           int           `yaml:",omitempty"`
-	Profiler       Profiler      `yaml:"profiler,omitempty"`
 	RequireAuth    bool          `yaml:"require_auth,omitempty"` // when true, unauthenticated access to api/ endpoint is not allowed
 	WebFQDN        string        `yaml:"web_fqdn,omitempty"`
 	WebPort        string        `yaml:"web_port,omitempty"`
@@ -629,8 +629,8 @@ type Validations struct {
 // Clustering defines configuration around multi-cluster functionality.
 type Clustering struct {
 	// Clusters is a list of clusters that cannot be autodetected by the Kiali Server.
-	// Remote clusters are specified here if ‘autodetect_secrets.enabled’ is false or
-	// if the Kiali Server does not have access to the remote cluster’s secret.
+	// Remote clusters are specified here if ‘autodetect_secrets.enabled' is false or
+	// if the Kiali Server does not have access to the remote cluster's secret.
 	Clusters  []Cluster  `yaml:"clusters" json:"clusters"`
 	KialiURLs []KialiURL `yaml:"kiali_urls" json:"kiali_urls"`
 }
@@ -966,6 +966,9 @@ func NewConfig() (c *Config) {
 				Metrics: Metrics{
 					Enabled: true,
 					Port:    9090,
+				},
+				Profiler: Profiler{
+					Enabled: true,
 				},
 				Tracing: Tracing{
 					CollectorType: OTELCollectorType,
