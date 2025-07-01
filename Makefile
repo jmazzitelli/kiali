@@ -1,3 +1,4 @@
+# MAZZ
 # Needed for Travis - it won't like the version regex check otherwise
 SHELL=/bin/bash
 
