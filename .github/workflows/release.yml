@@ -24,6 +24,11 @@ on:
         type: string
         default: quay.io/kiali/kiali
         required: true
+      run-molecule-tests:
+        description: "Run molecule tests before release"
+        type: boolean
+        default: true
+        required: true
 
 jobs:
   initialize:
@@ -198,7 +203,7 @@ jobs:
 
   run_molecule_tests:
     name: Molecule tests
-    if: ${{ needs.initialize.outputs.release_type != 'skip' }}
+    if: ${{ needs.initialize.outputs.release_type != 'skip' && (github.event.inputs.run-molecule-tests == 'true') }}
     uses: ./.github/workflows/molecules.yml
     needs: [initialize]
     with:
