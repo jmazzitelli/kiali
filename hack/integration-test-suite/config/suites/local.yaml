@@ -1,0 +1,29 @@
+name: "local"
+description: "Frontend tests with Kiali in local mode"
+
+clusters:
+  count: 1
+  type: "${CLUSTER_TYPE}"
+  configs:
+  - name: "primary"
+    template: "single-cluster"
+    context: "${CLUSTER_TYPE}-primary"
+
+components:
+  istio:
+    required: false
+  kiali:
+    required: true
+    deployment_type: "local"
+    version: "${KIALI_VERSION:-latest}"
+
+test_execution:
+  type: "cypress"
+  config_file: "cypress.config.ts"
+  pattern: "**/*.feature"
+  environment:
+    CI: "1"
+    TERM: "xterm"
+    CYPRESS_LOCAL_MODE: "true"
+
+timeout: 3600

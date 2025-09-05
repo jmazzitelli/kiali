@@ -1,0 +1,58 @@
+name: "frontend-multicluster-primary-remote"
+description: "Frontend tests with primary-remote multicluster setup"
+
+clusters:
+  count: 2
+  type: "${CLUSTER_TYPE}"
+  network_config: "multicluster-network"
+  configs:
+  - name: "primary"
+    template: "multicluster-primary"
+    context: "${CLUSTER_TYPE}-primary"
+    network:
+      metallb_range: "255.70-255.84" # KinD
+      minikube_profile: "ci-primary" # Minikube
+  - name: "remote"
+    template: "multicluster-remote"
+    context: "${CLUSTER_TYPE}-remote"
+    network:
+      metallb_range: "255.85-255.99" # KinD
+      minikube_profile: "ci-remote" # Minikube
+
+components:
+  istio:
+    required: true
+    mode: "multicluster"
+    topology: "primary-remote"
+    version: "${ISTIO_VERSION:-latest}"
+    primary_cluster: "primary"
+    remote_clusters: ["remote"]
+    network_config:
+      service_type: "${SERVICE_TYPE:-auto}" # auto-detected
+      cross_cluster_discovery: true
+  kiali:
+    required: true
+    deployment_type: "in-cluster"
+    cluster: "primary"
+    remote_clusters: ["remote"]
+    network_config:
+      service_type: "${SERVICE_TYPE:-auto}"
+      external_access: true
+
+test_execution:
+  type: "cypress"
+  config_file: "cypress.config.ts"
+  pattern: "**/*.feature"
+  environment:
+    CI: "1"
+    TERM: "xterm"
+    CYPRESS_MULTICLUSTER: "true"
+    CYPRESS_MULTICLUSTER_TYPE: "primary-remote"
+
+network:
+  validation:
+  - "kiali_accessible"
+  - "istio_gateway_accessible"
+  - "cross_cluster_connectivity"
+
+timeout: 4800

@@ -1,0 +1,35 @@
+name: "frontend-tempo"
+description: "Frontend Cypress tests with Tempo tracing"
+
+clusters:
+  count: 1
+  type: "${CLUSTER_TYPE}"
+  configs:
+  - name: "primary"
+    template: "single-cluster"
+    context: "${CLUSTER_TYPE}-primary"
+
+components:
+  istio:
+    required: true
+    mode: "standard"
+    version: "${ISTIO_VERSION:-latest}"
+  kiali:
+    required: true
+    deployment_type: "in-cluster"
+    version: "${KIALI_VERSION:-latest}"
+  tempo:
+    required: true
+    version: "latest"
+
+test_execution:
+  type: "cypress"
+  config_file: "cypress.config.ts"
+  pattern: "**/*.feature"
+  environment:
+    CI: "1"
+    TERM: "xterm"
+    CYPRESS_TEMPO_ENABLED: "true"
+    CYPRESS_TRACING_ENABLED: "true"
+
+timeout: 3600

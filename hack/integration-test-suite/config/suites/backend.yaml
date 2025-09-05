@@ -1,0 +1,27 @@
+name: "backend"
+description: "Backend API integration tests"
+
+clusters:
+  count: 1
+  type: "${CLUSTER_TYPE}"
+  configs:
+  - name: "primary"
+    template: "single-cluster"
+    context: "${CLUSTER_TYPE}-primary"
+
+components:
+  istio:
+    required: true
+    mode: "standard"
+    version: "${ISTIO_VERSION:-latest}"
+  kiali:
+    required: true
+    deployment_type: "in-cluster"
+    version: "${KIALI_VERSION:-latest}"
+
+test_execution:
+  type: "go"
+  command: "make test-integration-controller"
+  timeout: 600
+
+timeout: 1800

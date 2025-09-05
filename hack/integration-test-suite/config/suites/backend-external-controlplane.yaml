@@ -1,0 +1,33 @@
+name: "backend-external-controlplane"
+description: "Backend API integration tests with external controlplane"
+
+clusters:
+  count: 2
+  type: "${CLUSTER_TYPE}"
+  configs:
+  - name: "controlplane"
+    template: "multicluster-controlplane"
+    context: "${CLUSTER_TYPE}-controlplane"
+  - name: "dataplane"
+    template: "multicluster-dataplane"
+    context: "${CLUSTER_TYPE}-dataplane"
+
+components:
+  istio:
+    required: true
+    mode: "external-controlplane"
+    version: "${ISTIO_VERSION:-latest}"
+    controlplane_cluster: "controlplane"
+    dataplane_clusters: ["dataplane"]
+  kiali:
+    required: true
+    deployment_type: "in-cluster"
+    cluster: "controlplane"
+    version: "${KIALI_VERSION:-latest}"
+
+test_execution:
+  type: "go"
+  command: "make test-integration-external-controlplane"
+  timeout: 900
+
+timeout: 2400

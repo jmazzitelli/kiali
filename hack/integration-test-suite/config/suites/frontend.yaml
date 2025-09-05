@@ -1,0 +1,30 @@
+name: "frontend"
+description: "Frontend Cypress integration tests"
+
+clusters:
+  count: 1
+  type: "${CLUSTER_TYPE}"
+  configs:
+  - name: "primary"
+    template: "single-cluster"
+    context: "${CLUSTER_TYPE}-primary"
+
+components:
+  istio:
+    required: true
+    mode: "standard"
+    version: "${ISTIO_VERSION:-latest}"
+  kiali:
+    required: true
+    deployment_type: "in-cluster"
+    version: "${KIALI_VERSION:-latest}"
+
+test_execution:
+  type: "cypress"
+  config_file: "cypress.config.ts"
+  pattern: "**/*.feature"
+  environment:
+    CI: "1"
+    TERM: "xterm"
+
+timeout: 3600
