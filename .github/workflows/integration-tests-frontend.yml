@@ -43,6 +43,11 @@ jobs:
       with:
         version: 'v3.18.4'
 
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
     # This caches the yarn deps but does not touch node_modules so it's still necessary
     # to run 'yarn install' later to link these into node_modules.
     - name: Setup node
@@ -66,8 +71,18 @@ jobs:
       working-directory: ./frontend
       run: yarn install --frozen-lockfile
 
+    # Build the integration framework
+    - name: Build integration framework
+      working-directory: ./kiali-integration-framework
+      run: make build
+
+    # Run frontend integration tests using the new integration framework
     - name: Run frontend integration tests
-      run: hack/run-integration-tests.sh --test-suite frontend --stern ${{ inputs.stern_logs }} $(if [ -n "${{ inputs.istio_version }}" ]; then echo "--istio-version ${{ inputs.istio_version }}"; fi)
+      working-directory: ./kiali-integration-framework
+      run: |
+        ./build/kiali-test init --config ../frontend-cypress-config.yaml
+        ./build/kiali-test up --config ../frontend-cypress-config.yaml
+        ./build/kiali-test run frontend-cypress --config ../frontend-cypress-config.yaml
 
     - name: Get debug info when integration tests fail
       if: failure()
@@ -89,10 +104,17 @@ jobs:
         name: cypress-screenshots-${{ github.job }}
         path: frontend/cypress/screenshots
 
-    - name: Upload cypress logs from stern
+    - name: Upload cypress videos when tests fail
       uses: actions/upload-artifact@v4
-      if: ${{ inputs.stern_logs == true }}
+      if: failure()
       with:
-        name: cypress-logs-${{ github.job }}
-        path: hack/stern
+        name: cypress-videos-${{ github.job }}
+        path: frontend/cypress/videos
+
+    - name: Upload integration framework test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results-${{ github.job }}
+        path: kiali-integration-framework/test-results/
 

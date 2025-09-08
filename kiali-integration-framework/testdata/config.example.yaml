@@ -1,0 +1,86 @@
+# Example configuration file for Kiali Integration Framework
+# This file demonstrates all available configuration options
+
+version: "1.0"
+
+# Global settings
+global:
+  timeout: "300s"
+  workingDir: "."
+  tempDir: "/tmp/kiali-integration-framework"
+  logLevel: "info"
+  verbose: false
+
+# Cluster configuration
+cluster:
+  provider: "kind"
+  name: "kiali-test"
+  version: "1.27.0"
+  config:
+    nodes: 1
+    memory: "4Gi"
+    cpus: "2"
+
+# Component configurations
+components:
+  istio:
+    version: "1.20.0"
+    enabled: true
+    profile: "default"
+    config:
+      meshConfig:
+        accessLogFile: "/dev/stdout"
+        accessLogEncoding: "JSON"
+
+  kiali:
+    version: "latest"
+    enabled: true
+    auth:
+      strategy: "token"
+    config:
+      istio_namespace: "istio-system"
+      external_services:
+        istio:
+          url_service_version: "http://istiod.istio-system:15014/version"
+
+  prometheus:
+    version: "latest"
+    enabled: true
+    config:
+      retention: "6h"
+      storage:
+        local:
+          retention: "6h"
+
+  jaeger:
+    version: "latest"
+    enabled: false
+    config:
+      collector:
+        otlp:
+          enabled: true
+
+# Test configurations
+tests:
+  cypress:
+    baseUrl: "http://localhost:20001"
+    timeout: 60000
+    enabled: true
+    config:
+      viewportWidth: 1280
+      viewportHeight: 720
+      video: false
+      screenshotOnRunFailure: true
+
+  go:
+    enabled: true
+    config:
+      testTimeout: "10m"
+      parallel: 4
+      verbose: true
+
+  # Custom test configuration
+  custom:
+    enabled: false
+    config:
+      customSetting: "value"

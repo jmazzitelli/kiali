@@ -51,8 +51,89 @@ jobs:
     - name: Ensure kiali binary is executable
       run: chmod +x ~/go/bin/kiali
 
+    # Build the integration framework
+    - name: Build integration framework
+      working-directory: ./kiali-integration-framework
+      run: make build
+
+    # Create external controlplane test configuration
+    - name: Create external controlplane test config
+      working-directory: ./kiali-integration-framework
+      run: |
+        cat > external-controlplane-test-config.yaml << 'EOF'
+        version: "1.0"
+        clusters:
+          primary:
+            provider: kind
+            name: kiali-controlplane
+            version: "1.27.0"
+            config:
+              nodes: 1
+          remotes:
+            remote-cluster:
+              provider: kind
+              name: kiali-remote
+              version: "1.27.0"
+              config:
+                nodes: 1
+        federation:
+          enabled: true
+          trustDomain: cluster.local
+          serviceMesh:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+        components:
+          istio-primary:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+            config:
+              profile: default
+          istio-remote:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+            config:
+              profile: remote
+              externalControlPlane: true
+          kiali-primary:
+            type: kiali
+            version: "1.73.0"
+            enabled: true
+            config:
+              auth:
+                strategy: "token"
+          prometheus-primary:
+            type: prometheus
+            version: "2.45.0"
+            enabled: true
+        tests:
+          backend-external-controlplane:
+            type: go
+            enabled: true
+            config:
+              go:
+                package: "./tests/integration/..."
+                verbose: true
+                race: true
+                timeout: "30m"
+                env:
+                  KIALI_URL: "http://localhost:20001"
+                  PROMETHEUS_URL: "http://localhost:9090"
+                  EXTERNAL_CONTROLPLANE: "true"
+        global:
+          logLevel: "info"
+          timeout: 1800000000000
+          verbose: true
+        EOF
+
+    # Run backend external controlplane integration tests using the new integration framework
     - name: Run backend integration tests
-      run: hack/run-integration-tests.sh --test-suite backend-external-controlplane $(if [ -n "${{ inputs.istio_version }}" ]; then echo "--istio-version ${{ inputs.istio_version }}"; fi)
+      working-directory: ./kiali-integration-framework
+      run: |
+        ./build/kiali-test init --config external-controlplane-test-config.yaml
+        ./build/kiali-test up --config external-controlplane-test-config.yaml
+        ./build/kiali-test run backend-external-controlplane --config external-controlplane-test-config.yaml
 
     - name: Get debug info when integration tests fail
       if: failure()
