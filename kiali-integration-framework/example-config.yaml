@@ -1,0 +1,571 @@
+# Kiali Integration Framework Configuration Examples
+# This file shows both single-cluster (legacy) and multi-cluster configurations
+
+# =============================================================================
+# SERVICE DISCOVERY CONFIGURATION EXAMPLES (PHASE 7)
+# Uncomment and modify the following sections for service discovery testing:
+
+# DNS-based Service Discovery Configuration
+# serviceDiscovery:
+#   enabled: true
+#   type: dns
+#   clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#   domains: ["cluster.local", "svc.cluster.local"]
+#   config:
+#     enabled: true
+#     clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#     searchDomains: ["cluster.local", "federation.local"]
+#     nameservers: ["10.96.0.10", "8.8.8.8"]
+#     ttl: 30
+
+# API Server Aggregation Configuration
+# serviceDiscovery:
+#   enabled: true
+#   type: api-server
+#   clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#   config:
+#     enabled: true
+#     clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#     apiServerUrl: "https://api.federation.local:6443"
+#     caCert: |
+#       -----BEGIN CERTIFICATE-----
+#       MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+#       -----END CERTIFICATE-----
+#     clientCert: |
+#       -----BEGIN CERTIFICATE-----
+#       MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+#       -----END CERTIFICATE-----
+#     clientKey: |
+#       -----BEGIN RSA PRIVATE KEY-----
+#       MIIEpQIBAAKCAQEA...
+#       -----END RSA PRIVATE KEY-----
+
+# Service Propagation Configuration
+# serviceDiscovery:
+#   enabled: true
+#   type: propagation
+#   clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#   config:
+#     enabled: true
+#     clusters: ["kiali-primary", "kiali-east", "kiali-west"]
+#     selectorLabels:
+#       app.kubernetes.io/managed-by: "kiali"
+#       service-discovery: "enabled"
+#     excludeLabels:
+#       service-discovery/skip: "true"
+#     namespaces: ["default", "istio-system", "kiali-operator"]
+#     syncInterval: "5m"
+
+# Manual Service Discovery Configuration
+# serviceDiscovery:
+#   enabled: true
+#   type: manual
+#   clusters: ["kiali-primary"]
+#   config:
+#     customDNS: true
+#     externalServices:
+#       - name: external-service
+#         namespace: default
+#         address: external.example.com
+#         ports:
+#           - name: http
+#             port: 80
+#             protocol: TCP
+
+# =============================================================================
+# MINIKUBE CONFIGURATION EXAMPLES (PHASE 9)
+# Comprehensive Minikube configuration examples for single and multi-cluster testing:
+
+# Example 1: Single Minikube Cluster with Custom Resources
+# version: "1.0"
+# cluster:
+#   provider: minikube
+#   name: "kiali-minikube-test"
+#   version: "1.27.0"
+#   config:
+#     nodes: 1
+#     memory: "4g"
+#     cpus: "2"
+#     driver: "docker"
+#     diskSize: "20g"
+#     addons: ["ingress", "dashboard", "registry"]
+#     ports: ["8080:30080", "8443:30443"]
+
+# Example 2: Multi-Cluster Minikube with Production-like Resources
+# version: "1.0"
+# clusters:
+#   primary:
+#     provider: minikube
+#     name: kiali-primary
+#     version: "1.27.0"
+#     config:
+#       nodes: 1
+#       memory: "6g"
+#       cpus: "3"
+#       driver: "docker"
+#       diskSize: "30g"
+#       addons: ["ingress", "dashboard", "registry", "metrics-server"]
+#       ports: ["8080:30080", "8443:30443", "9090:30090"]
+#   remotes:
+#     east-cluster:
+#       provider: minikube
+#       name: kiali-east
+#       version: "1.27.0"
+#       config:
+#         nodes: 1
+#         memory: "4g"
+#         cpus: "2"
+#         driver: "docker"
+#         diskSize: "20g"
+#         addons: ["ingress", "dashboard"]
+#         ports: ["8081:30081", "8444:30444"]
+#     west-cluster:
+#       provider: minikube
+#       name: kiali-west
+#       version: "1.27.0"
+#       config:
+#         nodes: 1
+#         memory: "4g"
+#         cpus: "2"
+#         driver: "docker"
+#         diskSize: "20g"
+#         addons: ["ingress", "dashboard"]
+#         ports: ["8082:30082", "8445:30445"]
+
+# Example 3: Minikube with Different Drivers (VirtualBox, Podman, etc.)
+# version: "1.0"
+# cluster:
+#   provider: minikube
+#   name: "kiali-virtualbox-test"
+#   version: "1.27.0"
+#   config:
+#     nodes: 1
+#     memory: "8g"
+#     cpus: "4"
+#     driver: "virtualbox"
+#     diskSize: "50g"
+#     addons: ["ingress", "dashboard", "registry", "storage-provisioner"]
+#     ports: ["8080:30080", "8443:30443", "3306:30306"]
+
+# Example 4: Resource-Constrained Minikube for CI/CD
+# version: "1.0"
+# cluster:
+#   provider: minikube
+#   name: "kiali-ci-test"
+#   version: "1.27.0"
+#   config:
+#     nodes: 1
+#     memory: "2g"
+#     cpus: "1"
+#     driver: "docker"
+#     diskSize: "10g"
+#     addons: ["ingress"]
+#     ports: ["8080:30080"]
+
+# Example 5: High-Performance Minikube for Development
+# version: "1.0"
+# cluster:
+#   provider: minikube
+#   name: "kiali-dev-test"
+#   version: "1.27.0"
+#   config:
+#     nodes: 3
+#     memory: "12g"
+#     cpus: "6"
+#     driver: "docker"
+#     diskSize: "100g"
+#     addons: ["ingress", "dashboard", "registry", "metrics-server", "storage-provisioner", "istio"]
+#     ports: ["8080:30080", "8443:30443", "9090:30090", "15017:31517"]
+
+# =============================================================================
+# MULTI-CLUSTER CONFIGURATION EXAMPLE (NEW)
+# Uncomment and modify the following section for multi-cluster testing:
+#
+# version: "1.0"
+# clusters:
+#   # Primary cluster configuration
+#   primary:
+#     provider: kind
+#     name: kiali-primary
+#     version: "1.27.0"
+#     config:
+#       nodes: 2
+#       memory: "4Gi"
+#       cpus: "2"
+#
+#   # Remote clusters configuration
+#   remotes:
+#     east-cluster:
+#       provider: kind
+#       name: kiali-east
+#       version: "1.27.0"
+#       config:
+#         nodes: 1
+#         memory: "2Gi"
+#         cpus: "1"
+#     west-cluster:
+#       provider: kind
+#       name: kiali-west
+#       version: "1.27.0"
+#       config:
+#         nodes: 1
+#         memory: "2Gi"
+#         cpus: "1"
+#
+#   # Federation configuration
+#   federation:
+#     enabled: true
+#     trustDomain: cluster.local
+#     serviceMesh:
+#       type: istio
+#       version: "1.20.0"
+#       config:
+#         pilotAddress: istiod.istio-system.svc.cluster.local
+#     certificateAuthority:
+#       type: citadel
+#
+#   # Network configuration for cross-cluster communication
+#   network:
+#     gateway:
+#       type: istio
+#       version: "1.20.0"
+#     serviceDiscovery:
+#       type: dns
+#     policies:
+#       - name: allow-east-west-traffic
+#         namespace: istio-system
+#         rules:
+#           - from: ["east-cluster"]
+#             to: ["west-cluster"]
+#             ports: ["8080", "8443"]
+#             protocol: tcp
+#             action: allow
+#
+# components:
+#   istio-primary:
+#     type: istio
+#     version: "1.20.0"
+#     enabled: true
+#     config:
+#       profile: default
+#   istio-east:
+#     type: istio
+#     version: "1.20.0"
+#     enabled: true
+#     config:
+#       profile: remote
+#   istio-west:
+#     type: istio
+#     version: "1.20.0"
+#     enabled: true
+#     config:
+#       profile: remote
+#   kiali-primary:
+#     type: kiali
+#     version: "1.73.0"
+#     enabled: true
+#   prometheus-primary:
+#     type: prometheus
+#     version: "2.45.0"
+#     enabled: true
+#
+# tests:
+#   multi-cluster-smoke-test:
+#     type: go
+#     enabled: true
+#     config:
+#       go:
+#         package: "./tests/smoke"
+#         timeout: "10m"
+#         race: true
+#         coverage: true
+#         env:
+#           PRIMARY_CLUSTER: "kiali-primary"
+#           REMOTE_CLUSTERS: "east-cluster,west-cluster"
+#           FEDERATION_ENABLED: "true"
+#   multi-cluster-integration-test:
+#     type: cypress
+#     enabled: true
+#     config:
+#       cypress:
+#         spec: "cypress/integration/multi-cluster/**/*"
+#         configFile: "cypress.config.js"
+#         headless: true
+#         env:
+#           baseUrl: "http://kiali-primary.istio-system.svc.cluster.local:20001"
+#           PRIMARY_CLUSTER: "kiali-primary"
+#           REMOTE_CLUSTERS: "east-cluster,west-cluster"
+#
+# # Multi-cluster test configurations (NEW)
+# multiClusterTests:
+#   federation-connectivity-test:
+#     type: federation
+#     enabled: true
+#     parallel: true
+#     maxConcurrency: 2
+#     timeout: 15m
+#     retryPolicy:
+#       maxRetries: 2
+#       retryDelay: 10s
+#     config:
+#       federation:
+#         validateTrustDomain: true
+#         validateCertificates: true
+#         validateServiceMesh: true
+#         validateGateway: true
+#         testCrossClusterServices: true
+#   traffic-validation-test:
+#     type: traffic
+#     enabled: true
+#     clusters: ["kiali-primary", "east-cluster", "west-cluster"]
+#     parallel: true
+#     maxConcurrency: 3
+#     timeout: 20m
+#     retryPolicy:
+#       maxRetries: 3
+#       retryDelay: 15s
+#     config:
+#       traffic:
+#         protocols: ["http", "grpc", "tcp"]
+#         validateConnectivity: true
+#         validateLoadBalancing: true
+#         validateFailover: true
+#         serviceDiscovery: true
+#   discovery-validation-test:
+#     type: discovery
+#     enabled: true
+#     excludeClusters: []  # Test all clusters
+#     parallel: false  # DNS tests need to be sequential
+#     timeout: 10m
+#     retryPolicy:
+#       maxRetries: 1
+#       retryDelay: 5s
+#     config:
+#       discovery:
+#         validateDNS: true
+#         validateAPIServerAggregation: true
+#         validateServicePropagation: true
+#         testHealthChecks: true
+#   failover-scenario-test:
+#     type: failover
+#     enabled: true
+#     clusters: ["kiali-primary", "east-cluster"]
+#     parallel: false  # Failover tests are inherently sequential
+#     timeout: 25m
+#     retryPolicy:
+#       maxRetries: 1
+#       retryDelay: 30s
+#     config:
+#       failover:
+#         simulatePrimaryFailure: true
+#         testFailoverToSecondary: true
+#         validateServiceContinuity: true
+#         testFailback: true
+#   load-balance-validation-test:
+#     type: load-balance
+#     enabled: true
+#     clusters: ["kiali-primary", "east-cluster", "west-cluster"]
+#     parallel: true
+#     maxConcurrency: 2
+#     timeout: 30m
+#     retryPolicy:
+#       maxRetries: 2
+#       retryDelay: 20s
+#     config:
+#       loadBalance:
+#         testDistribution: true
+#         validateWeights: true
+#         testSessionAffinity: true
+#         validateHealthChecks: true
+#         timeout: "15m"
+#
+# global:
+#   logLevel: "info"
+#   timeout: 1800000000000  # 30 minutes
+#   verbose: true
+# =============================================================================
+
+# =============================================================================
+# SINGLE-CLUSTER CONFIGURATION EXAMPLE (LEGACY)
+# The configuration below is for single-cluster testing (backward compatible)
+# =============================================================================
+
+version: "1.0"
+cluster:
+  provider: kind
+  name: "kiali-integration-test"
+  version: "1.27.0"
+  config:
+    nodes: 1
+
+components:
+  istio:
+    type: istio
+    version: "1.20.0"
+    enabled: true
+    config:
+      profile: "default"
+  kiali:
+    type: kiali
+    version: "1.73.0"
+    enabled: true
+    config:
+      auth:
+        strategy: "token"
+  prometheus:
+    type: prometheus
+    version: "2.45.0"
+    enabled: true
+  # Network Connectivity Component Examples
+  # Use one of the following connectivity configurations:
+
+  # Example 1: Kubernetes Basic Connectivity (using template)
+  network-connectivity-k8s-template:
+    type: network-connectivity
+    version: "1.0.0"
+    enabled: true
+    config:
+      connectivity:
+        template: "kubernetes-basic"
+        allowCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+        dns:
+          searchDomains: ["cluster.local", "svc.cluster.local"]
+
+  # Example 2: Istio Service Mesh Connectivity (using template)
+  network-connectivity-istio-template:
+    type: network-connectivity
+    version: "1.0.0"
+    enabled: false # Uncomment to enable
+    config:
+      connectivity:
+        template: "istio-service-mesh"
+        serviceMesh:
+          discoverySelectors:
+          - istio.io/tag: cross-cluster
+        trafficManagement:
+          circuitBreaker: true
+          loadBalancing: "ROUND_ROBIN"
+
+  # Example 3: Manual Connectivity Configuration
+  network-connectivity-manual:
+    type: network-connectivity
+    version: "1.0.0"
+    enabled: false # Uncomment to enable
+    config:
+      connectivity:
+        type: manual
+        custom:
+          enabled: true
+          configurations:
+          - name: "cross-cluster-dns"
+            dnsServers: ["10.96.0.10", "8.8.8.8"]
+            searchDomains: ["cluster.local"]
+          - name: "cross-cluster-routing"
+            gateway: "istio-ingressgateway"
+            ports: ["80", "443"]
+        resources:
+        - type: service
+          name: "cross-cluster-service"
+          namespace: "default"
+          hosts: ["*.cluster.local"]
+          ports:
+          - name: http
+            port: 80
+            targetPort: 8080
+          - name: https
+            port: 443
+            targetPort: 8443
+
+  # Example 4: Linkerd Service Mesh Connectivity
+  network-connectivity-linkerd:
+    type: network-connectivity
+    version: "1.0.0"
+    enabled: false # Uncomment to enable
+    config:
+      connectivity:
+        type: linkerd
+        serviceMesh:
+          enabled: true
+          trustDomain: "cluster.local"
+          discoverySelectors:
+          - linkerd.io/control-plane-ns: linkerd
+        trafficManagement:
+          loadBalancing: "ewma"
+          retries: 3
+          timeout: "30s"
+
+tests:
+  cypress-frontend:
+    type: cypress
+    enabled: true
+    config:
+      cypress:
+        baseUrl: "http://localhost:3000"
+        specPattern: "**/*.feature"
+        workingDir: "./frontend"
+        headless: true
+        browser: "electron"
+        defaultCommandTimeout: 40000
+        requestTimeout: 15000
+        responseTimeout: 15000
+        pageLoadTimeout: 90000
+        tags: ["@error-rates-app", "@core"]
+        env:
+          CYPRESS_TEST_VAR: "frontend_test"
+  cypress:
+    type: cypress
+    enabled: false # Keep original for backward compatibility
+    config:
+      cypress:
+        baseUrl: "http://localhost:20001"
+        specPattern: "cypress/integration/**/*.cy.{js,jsx,ts,tsx}"
+        headless: true
+        browser: "electron"
+        defaultCommandTimeout: 10000
+        requestTimeout: 15000
+        tags: ["@core", "@smoke"]
+        env:
+          CYPRESS_TEST_VAR: "test_value"
+  go-unit:
+    type: go
+    enabled: true
+    config:
+      go:
+        packages: ["./pkg/...", "./cmd/..."]
+        verbose: true
+        race: true
+        timeout: "10m"
+        coverage: true
+        coverageProfile: "coverage-unit.out"
+        tags: ["unit"]
+        env:
+          GO_TEST_VAR: "unit_test_value"
+  go-integration:
+    type: go
+    enabled: true
+    config:
+      go:
+        package: "./tests/integration/..."
+        verbose: true
+        race: false
+        timeout: "30m"
+        run: "TestIntegration"
+        skip: "TestSlow"
+        env:
+          KIALI_URL: "http://localhost:20001"
+          PROMETHEUS_URL: "http://localhost:9090"
+  go-benchmark:
+    type: go
+    enabled: false
+    config:
+      go:
+        package: "./pkg/..."
+        bench: "Benchmark"
+        benchTime: "10s"
+        count: 3
+        verbose: true
+
+global:
+  logLevel: "info"
+  timeout: 600000000000 # 10 minutes
+  verbose: true

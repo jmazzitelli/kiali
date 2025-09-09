@@ -38,6 +38,11 @@ jobs:
       with:
         version: 'v3.18.4'
 
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
     - name: Setup node
       uses: actions/setup-node@v4
       with:
@@ -59,8 +64,97 @@ jobs:
       working-directory: ./frontend
       run: yarn install --frozen-lockfile
 
+    # Build the integration framework
+    - name: Build integration framework
+      working-directory: ./kiali-integration-framework
+      run: make build
+
+    # Create external Kiali configuration
+    - name: Create external kiali config
+      working-directory: ./kiali-integration-framework
+      run: |
+        cat > external-kiali-frontend-config.yaml << 'EOF'
+        version: "1.0"
+        clusters:
+          primary:
+            provider: kind
+            name: kiali-primary
+            version: "1.27.0"
+            config:
+              nodes: 1
+          remotes:
+            east-cluster:
+              provider: kind
+              name: kiali-east
+              version: "1.27.0"
+              config:
+                nodes: 1
+        federation:
+          enabled: true
+          trustDomain: cluster.local
+          serviceMesh:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+        components:
+          istio-primary:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+          istio-east:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+            config:
+              profile: remote
+          kiali-primary:
+            type: kiali
+            version: "1.73.0"
+            enabled: true
+            config:
+              auth:
+                strategy: "openid"
+              web_port: "3000"
+          kiali-east:
+            type: kiali
+            version: "1.73.0"
+            enabled: true
+            config:
+              auth:
+                strategy: "openid"
+              web_port: "3001"
+          prometheus-primary:
+            type: prometheus
+            version: "2.45.0"
+            enabled: true
+        tests:
+          frontend-external-kiali:
+            type: cypress
+            enabled: true
+            config:
+              cypress:
+                baseUrl: "http://localhost:3000"
+                specPattern: "**/*.feature"
+                workingDir: "./frontend"
+                headless: true
+                browser: "electron"
+                defaultCommandTimeout: 40000
+                requestTimeout: 15000
+                responseTimeout: 15000
+                pageLoadTimeout: 90000
+                tags: ["@external-kiali"]
+        global:
+          logLevel: "info"
+          timeout: 1800000000000
+          verbose: true
+        EOF
+
+    # Run frontend external Kiali integration tests using the new integration framework
     - name: Run frontend external Kiali integration tests
-      run: hack/run-integration-tests.sh --test-suite frontend-external-kiali $(if [ -n "${{ inputs.istio_version }}" ]; then echo "--istio-version ${{ inputs.istio_version }}"; fi)
+      working-directory: ./kiali-integration-framework
+      run: |
+        ./build/kiali-test init --config external-kiali-frontend-config.yaml
+        ./build/kiali-test up --config external-kiali-frontend-config.yaml
+        ./build/kiali-test run frontend-external-kiali --config external-kiali-frontend-config.yaml
 
     - name: Get debug info when integration tests fail
       if: failure()
@@ -81,3 +175,17 @@ jobs:
       with:
         name: cypress-screenshots-${{ github.job }}
         path: frontend/cypress/screenshots
+
+    - name: Upload cypress videos when tests fail
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: cypress-videos-${{ github.job }}
+        path: frontend/cypress/videos
+
+    - name: Upload integration framework test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results-${{ github.job }}
+        path: kiali-integration-framework/test-results/

@@ -1,0 +1,69 @@
+# Configuration for running Kiali Frontend Cypress Tests
+# This configuration is specifically tailored for the frontend Cypress test suite
+
+version: "1.0"
+
+# Use KinD for frontend testing (lighter weight than Minikube)
+cluster:
+  provider: kind
+  name: "kiali-frontend-test"
+  version: "1.27.0"
+  config:
+    nodes: 1
+
+# Components needed for frontend testing
+components:
+  istio:
+    type: istio
+    version: "1.20.0"
+    enabled: true
+    config:
+      profile: "default"
+  kiali:
+    type: kiali
+    version: "1.73.0"
+    enabled: true
+    config:
+      auth:
+        strategy: "token"
+      web_root: "/"
+      web_port: "3000" # Frontend dev server port
+  prometheus:
+    type: prometheus
+    version: "2.45.0"
+    enabled: true
+
+# Frontend Cypress Tests Configuration
+tests:
+  frontend-cypress:
+    type: cypress
+    enabled: true
+    config:
+      cypress:
+        # Frontend development server URL
+        baseUrl: "http://localhost:3000"
+        # Pattern for Cucumber .feature files
+        specPattern: "**/*.feature"
+        # Working directory relative to integration framework
+        workingDir: "./frontend"
+        # Run headless for CI/CD
+        headless: true
+        # Use electron browser (most compatible)
+        browser: "electron"
+        # Extended timeouts for frontend tests
+        defaultCommandTimeout: 40000
+        requestTimeout: 15000
+        responseTimeout: 15000
+        pageLoadTimeout: 90000
+        # Common tags from frontend tests
+        tags: ["@error-rates-app", "@core"]
+        # Environment variables
+        env:
+          CYPRESS_TEST_VAR: "frontend_integration_test"
+          CYPRESS_AUTH_STRATEGY: "token"
+
+# Global configuration
+global:
+  logLevel: "info"
+  timeout: 1800000000000 # 30 minutes
+  verbose: true

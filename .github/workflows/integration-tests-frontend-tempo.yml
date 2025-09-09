@@ -41,6 +41,11 @@ jobs:
 
     # This caches the yarn deps but does not touch node_modules so it's still necessary
     # to run 'yarn install' later to link these into node_modules.
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
     - name: Setup node
       uses: actions/setup-node@v4
       with:
@@ -62,8 +67,75 @@ jobs:
       working-directory: ./frontend
       run: yarn install --frozen-lockfile
 
+    # Build the integration framework
+    - name: Build integration framework
+      working-directory: ./kiali-integration-framework
+      run: make build
+
+    # Create tempo configuration
+    - name: Create tempo config
+      working-directory: ./kiali-integration-framework
+      run: |
+        cat > tempo-frontend-config.yaml << 'EOF'
+        version: "1.0"
+        cluster:
+          provider: kind
+          name: kiali-tempo-test
+          version: "1.27.0"
+          config:
+            nodes: 1
+        components:
+          istio:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+            config:
+              profile: default
+          kiali:
+            type: kiali
+            version: "1.73.0"
+            enabled: true
+            config:
+              auth:
+                strategy: "token"
+              web_port: "3000"
+          prometheus:
+            type: prometheus
+            version: "2.45.0"
+            enabled: true
+          tempo:
+            type: tempo
+            version: "latest"
+            enabled: true
+        tests:
+          frontend-tempo:
+            type: cypress
+            enabled: true
+            config:
+              cypress:
+                baseUrl: "http://localhost:3000"
+                specPattern: "**/*.feature"
+                workingDir: "./frontend"
+                headless: true
+                browser: "electron"
+                defaultCommandTimeout: 40000
+                requestTimeout: 15000
+                responseTimeout: 15000
+                pageLoadTimeout: 90000
+                tags: ["@tracing", "@tempo"]
+        global:
+          logLevel: "info"
+          timeout: 1800000000000
+          verbose: true
+        EOF
+
+    # Run frontend integration tests using the new integration framework
     - name: Run frontend integration tests
-      run: hack/run-integration-tests.sh --test-suite frontend-tempo $(if [ -n "${{ inputs.istio_version }}" ]; then echo "--istio-version ${{ inputs.istio_version }}"; fi)
+      working-directory: ./kiali-integration-framework
+      run: |
+        ./build/kiali-test init --config tempo-frontend-config.yaml
+        ./build/kiali-test up --config tempo-frontend-config.yaml
+        ./build/kiali-test run frontend-tempo --config tempo-frontend-config.yaml
 
     - name: Get debug info when integration tests fail
       if: failure()
@@ -84,3 +156,17 @@ jobs:
       with:
         name: cypress-screenshots-${{ github.job }}
         path: frontend/cypress/screenshots
+
+    - name: Upload cypress videos when tests fail
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: cypress-videos-${{ github.job }}
+        path: frontend/cypress/videos
+
+    - name: Upload integration framework test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results-${{ github.job }}
+        path: kiali-integration-framework/test-results/

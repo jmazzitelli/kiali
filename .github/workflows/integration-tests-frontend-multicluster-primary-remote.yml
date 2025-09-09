@@ -1,4 +1,4 @@
-name: Integration Tests Frontend
+name: Integration Tests Frontend Multicluster
 
 on:
   workflow_call:
@@ -20,7 +20,7 @@ env:
 
 jobs:
   integration_tests_frontend_multicluster:
-    name: Cypress integration tests
+    name: Cypress multicluster integration tests
     runs-on: ubuntu-latest
     env:
       # Copied from: https://github.com/bahmutov/cypress-gh-action-split-install/blob/ca3916d4e7240ebdc337825d2d78eb354855464b/.github/workflows/tests.yml#L7-L11
@@ -38,6 +38,11 @@ jobs:
       uses: Azure/setup-helm@v4.2.0
       with:
         version: 'v3.18.4'
+
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
 
     - name: Setup node
       uses: actions/setup-node@v4
@@ -60,8 +65,89 @@ jobs:
       working-directory: ./frontend
       run: yarn install --frozen-lockfile
 
-    - name: Run frontend multi-cluster integration tests
-      run: hack/run-integration-tests.sh --test-suite frontend-primary-remote $(if [ -n "${{ inputs.istio_version }}" ]; then echo "--istio-version ${{ inputs.istio_version }}"; fi)
+    # Build the integration framework
+    - name: Build integration framework
+      working-directory: ./kiali-integration-framework
+      run: make build
+
+    # Create multicluster configuration for primary-remote setup
+    - name: Create multicluster config
+      working-directory: ./kiali-integration-framework
+      run: |
+        cat > multicluster-frontend-config.yaml << 'EOF'
+        version: "1.0"
+        clusters:
+          primary:
+            provider: kind
+            name: kiali-primary
+            version: "1.27.0"
+            config:
+              nodes: 1
+          remotes:
+            east-cluster:
+              provider: kind
+              name: kiali-east
+              version: "1.27.0"
+              config:
+                nodes: 1
+        federation:
+          enabled: true
+          trustDomain: cluster.local
+          serviceMesh:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+        components:
+          istio-primary:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+          istio-east:
+            type: istio
+            version: "${{ inputs.istio_version || '1.20.0' }}"
+            enabled: true
+            config:
+              profile: remote
+          kiali-primary:
+            type: kiali
+            version: "1.73.0"
+            enabled: true
+            config:
+              auth:
+                strategy: "token"
+              web_port: "3000"
+          prometheus-primary:
+            type: prometheus
+            version: "2.45.0"
+            enabled: true
+        tests:
+          frontend-multicluster:
+            type: cypress
+            enabled: true
+            config:
+              cypress:
+                baseUrl: "http://localhost:3000"
+                specPattern: "**/*.feature"
+                workingDir: "./frontend"
+                headless: true
+                browser: "electron"
+                defaultCommandTimeout: 40000
+                requestTimeout: 15000
+                responseTimeout: 15000
+                pageLoadTimeout: 90000
+                tags: ["@multi-cluster"]
+        global:
+          logLevel: "info"
+          timeout: 1800000000000
+          verbose: true
+        EOF
+
+    # Run frontend multicluster integration tests using the new integration framework
+    - name: Run frontend multicluster integration tests
+      working-directory: ./kiali-integration-framework
+      run: |
+        ./build/kiali-test init --config multicluster-frontend-config.yaml
+        ./build/kiali-test up --config multicluster-frontend-config.yaml
+        ./build/kiali-test run frontend-multicluster --config multicluster-frontend-config.yaml
 
     - name: Get debug info when integration tests fail
       if: failure()
@@ -82,3 +168,17 @@ jobs:
       with:
         name: cypress-screenshots-${{ github.job }}
         path: frontend/cypress/screenshots
+
+    - name: Upload cypress videos when tests fail
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: cypress-videos-${{ github.job }}
+        path: frontend/cypress/videos
+
+    - name: Upload integration framework test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results-${{ github.job }}
+        path: kiali-integration-framework/test-results/
