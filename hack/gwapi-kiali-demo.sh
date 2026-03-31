@@ -5,12 +5,17 @@
 # For OSSM-12190: exploring what metrics the OpenShift ingress Gateway API
 # produces and how Kiali can observe them — without a full Istio mesh.
 #
-# Installs only:
-#   - OSSM 3.x operator (needed for Gateway API CRDs)
-#   - GatewayClass + Gateway (triggers lightweight Istio in openshift-ingress)
+# Installs:
+#   - OSSM 3.x operator (provides Gateway API CRDs and the Istio control plane)
+#   - GatewayClass + Gateway (triggers a lightweight Istio in openshift-ingress)
 #   - Plain demo app (no sidecars) + HTTPRoute
-#   - PodMonitor for the gateway proxy's Envoy metrics
-#   - Kiali operator + CR (pointed at the gateway's istiod)
+#   - User workload monitoring (enables it if not already active)
+#   - PodMonitor in openshift-ingress so the *platform* Prometheus scrapes
+#     Istio/Envoy metrics from the gateway proxy.  This is an NE-1113
+#     workaround — see https://redhat.atlassian.net/browse/NE-1113
+#   - Kiali operator + CR configured to query thanos-querier via bearer token
+#   - ClusterRoleBinding (cluster-monitoring-view) so Kiali's service account
+#     can read metrics from thanos-querier
 #
 # Usage:
 #   ./gwapi-kiali-demo.sh install      Install all components
@@ -438,77 +443,47 @@ YAML
         done
     fi
 
-    create_gateway_podmonitor
+    setup_ne1113_gateway_metrics
 }
 
-create_gateway_podmonitor() {
-    info "Creating PodMonitor for gateway proxy metrics..."
+# ── NE-1113 Workaround ───────────────────────────────────────────────────────
+#
+# NE-1113 (https://redhat.atlassian.net/browse/NE-1113) plans to have the
+# cluster-ingress-operator ship a ServiceMonitor that scrapes Istio/Envoy
+# metrics from gateway proxy pods in openshift-ingress into the platform
+# Prometheus.  Until that is delivered, this function creates the equivalent
+# PodMonitor.  The monitor must live in openshift-ingress so that the
+# *platform* Prometheus (not user-workload) picks it up — user-workload
+# monitoring cannot scrape pods in openshift-* namespaces.
+#
+# Once NE-1113 lands, this function (and its uninstall counterpart) can be
+# removed entirely.
 
-    # Placed in the app namespace so user-workload Prometheus picks it up.
-    # namespaceSelector targets the gateway pods in openshift-ingress.
-    local tmpfile
-    tmpfile=$(mktemp)
-    cat > "$tmpfile" <<YAML
+setup_ne1113_gateway_metrics() {
+    header "Gateway Metrics Collection (NE-1113)"
+
+    info "Creating PodMonitor in ${INGRESS_NAMESPACE} for platform Prometheus..."
+
+    oc apply -f - <<YAML
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: gateway-proxy-monitor
-  namespace: ${APP_NAMESPACE}
+  name: gateway-istio-monitor
+  namespace: ${INGRESS_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: gwapi-kiali-demo
 spec:
-  namespaceSelector:
-    matchNames:
-    - ${INGRESS_NAMESPACE}
   selector:
-    matchExpressions:
-    - key: istio-prometheus-ignore
-      operator: DoesNotExist
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: ${GATEWAY_NAME}
   podMetricsEndpoints:
-  - path: /stats/prometheus
+  - port: metrics
+    path: /stats/prometheus
     interval: 15s
-    relabelings:
-    - action: keep
-      sourceLabels: ["__meta_kubernetes_pod_container_name"]
-      regex: "istio-proxy"
-    - action: keep
-      sourceLabels: ["__meta_kubernetes_pod_annotationpresent_prometheus_io_scrape"]
 YAML
 
-    # These relabeling rules contain dollar signs that must not be
-    # interpreted by the shell — printf preserves them literally.
-    printf '    - action: replace
-      regex: (\\d+);(([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4})
-      replacement: "[$2]:$1"
-      sourceLabels: ["__meta_kubernetes_pod_annotation_prometheus_io_port","__meta_kubernetes_pod_ip"]
-      targetLabel: "__address__"
-    - action: replace
-      regex: (\\d+);((([0-9]+?)(\\.|$)){4})
-      replacement: "$2:$1"
-      sourceLabels: ["__meta_kubernetes_pod_annotation_prometheus_io_port","__meta_kubernetes_pod_ip"]
-      targetLabel: "__address__"
-    - sourceLabels: ["__meta_kubernetes_pod_label_app_kubernetes_io_name","__meta_kubernetes_pod_label_app"]
-      separator: ";"
-      targetLabel: "app"
-      action: replace
-      regex: "(.+);.*|.*;(.+)"
-      replacement: "${1}${2}"
-    - sourceLabels: ["__meta_kubernetes_pod_label_app_kubernetes_io_version","__meta_kubernetes_pod_label_version"]
-      separator: ";"
-      targetLabel: "version"
-      action: replace
-      regex: "(.+);.*|.*;(.+)"
-      replacement: "${1}${2}"
-    - sourceLabels: ["__meta_kubernetes_namespace"]
-      action: replace
-      targetLabel: namespace
-    - action: replace
-      replacement: "default"
-      targetLabel: mesh_id
-' >> "$tmpfile"
-
-    oc apply -f "$tmpfile"
-    rm -f "$tmpfile"
-
-    ok "PodMonitor created in $APP_NAMESPACE (targeting $INGRESS_NAMESPACE)"
+    ok "PodMonitor gateway-istio-monitor created in ${INGRESS_NAMESPACE}"
+    info "Platform Prometheus will begin scraping gateway proxy metrics"
 }
 
 install_kiali() {
@@ -819,9 +794,12 @@ do_status() {
     else
         echo "    NOT enabled"
     fi
-    echo "  PodMonitors:"
-    oc get podmonitor -n "$APP_NAMESPACE" --no-headers 2>/dev/null \
-        | while read -r line; do echo "    [$APP_NAMESPACE] $line"; done
+    echo "  Gateway Metrics PodMonitor (NE-1113):"
+    if oc get podmonitor gateway-istio-monitor -n "$INGRESS_NAMESPACE" &>/dev/null; then
+        echo "    gateway-istio-monitor exists in $INGRESS_NAMESPACE"
+    else
+        echo "    NOT configured — gateway metrics not scraped into Prometheus"
+    fi
 
     header "CRDs"
     report_crds
@@ -882,8 +860,8 @@ do_uninstall() {
     info "Removing Kiali namespace..."
     oc delete namespace "$KIALI_NAMESPACE" --ignore-not-found --timeout=60s 2>/dev/null
 
-    info "Removing PodMonitor..."
-    oc delete podmonitor gateway-proxy-monitor -n "$APP_NAMESPACE" --ignore-not-found 2>/dev/null
+    info "Removing gateway metrics PodMonitor (NE-1113 workaround)..."
+    oc delete podmonitor gateway-istio-monitor -n "$INGRESS_NAMESPACE" --ignore-not-found 2>/dev/null
 
     info "Removing HTTPRoute..."
     oc delete httproute "$HTTPROUTE_NAME" -n "$APP_NAMESPACE" --ignore-not-found 2>/dev/null
@@ -950,11 +928,13 @@ usage() {
     echo "  uninstall            Remove all components"
     echo ""
     echo "What gets installed (minimal — no full Istio mesh):"
-    echo "  - OSSM 3.x operator (for CRDs)"
+    echo "  - OSSM 3.x operator (provides CRDs + Istio control plane)"
     echo "  - GatewayClass + Gateway in openshift-ingress"
     echo "  - Plain demo app (no sidecar) + HTTPRoute"
-    echo "  - PodMonitor for gateway proxy metrics"
-    echo "  - Kiali pointed at the gateway's istiod"
+    echo "  - User workload monitoring (if not already enabled)"
+    echo "  - PodMonitor in openshift-ingress for gateway metrics (NE-1113 workaround)"
+    echo "  - Kiali operator + CR (queries thanos-querier for metrics)"
+    echo "  - ClusterRoleBinding for Kiali to access platform monitoring"
     echo ""
     echo "Examples:"
     echo "  $(basename "$0") install                    # install everything"
