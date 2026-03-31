@@ -20,7 +20,8 @@
 # Usage:
 #   ./gwapi-kiali-demo.sh install      Install all components
 #   ./gwapi-kiali-demo.sh traffic      Generate clean traffic (try: traffic --help)
-#   ./gwapi-kiali-demo.sh metrics      Dump raw Envoy metrics from the gateway proxy
+#   ./gwapi-kiali-demo.sh scrape       Dump raw Envoy metrics from the gateway proxy
+#   ./gwapi-kiali-demo.sh prom        Query Prometheus for gateway metrics (alias: prometheus)
 #   ./gwapi-kiali-demo.sh status       Show status of all components
 #   ./gwapi-kiali-demo.sh urls         Print access URLs
 #   ./gwapi-kiali-demo.sh uninstall    Remove all components
@@ -626,8 +627,9 @@ do_install() {
     echo ""
     info "Next steps:"
     info "  1. Generate traffic:  $0 traffic"
-    info "  2. View raw metrics:  $0 metrics"
-    info "  3. Open Kiali UI and explore the graph"
+    info "  2. Raw proxy scrape:  $0 scrape"
+    info "  3. Prometheus query:  $0 prom"
+    info "  4. Open Kiali UI and explore the graph"
 }
 
 do_traffic() {
@@ -715,7 +717,45 @@ do_traffic() {
     trap - EXIT
 }
 
-do_metrics() {
+do_scrape() {
+    local show_kiali=true
+    local show_other=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --kiali)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--kiali requires a value: show|hide"
+                case "$2" in
+                    show) show_kiali=true ;;
+                    hide) show_kiali=false ;;
+                    *)    die "--kiali value must be 'show' or 'hide'" ;;
+                esac
+                shift; shift ;;
+            --other)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--other requires a value: show|hide"
+                case "$2" in
+                    show) show_other=true ;;
+                    hide) show_other=false ;;
+                    *)    die "--other value must be 'show' or 'hide'" ;;
+                esac
+                shift; shift ;;
+            -h|--help)
+                echo "Usage: $(basename "$0") scrape [options]"
+                echo ""
+                echo "Options:"
+                echo "  --kiali <show|hide>   Show/hide Kiali-relevant metrics (default: show)"
+                echo "  --other <show|hide>   Show/hide other metrics (default: hide)"
+                echo ""
+                echo "Examples:"
+                echo "  $(basename "$0") scrape                        # Kiali-relevant only"
+                echo "  $(basename "$0") scrape --other show           # both sections"
+                echo "  $(basename "$0") scrape --kiali hide --other show  # other only"
+                return 0
+                ;;
+            *)  die "Unknown option: $1 (try: $0 scrape --help)" ;;
+        esac
+    done
+
     info "Fetching raw Envoy metrics from gateway proxy..."
 
     local gateway_pod
@@ -744,28 +784,52 @@ do_metrics() {
 
     kill "$pf_pid" 2>/dev/null; wait "$pf_pid" 2>/dev/null || true
 
-    local total_metrics istio_metrics
+    local kiali_envoy="^envoy_cluster_upstream_cx_active|^envoy_cluster_upstream_rq_total|^envoy_listener_downstream_cx_active|^envoy_listener_http_downstream_rq|^envoy_server_memory_allocated|^envoy_server_memory_heap_size|^envoy_server_uptime"
+    local kiali_grep="^istio_requests_total|^istio_request_duration|^istio_request_bytes|^istio_response_bytes|^istio_tcp_sent|^istio_tcp_received|${kiali_envoy}"
+
+    local total_metrics kiali_metrics
     total_metrics=$(grep -v "^#" "$metrics_tmpfile" | grep -v "^$" \
         | cut -d'{' -f1 | cut -d' ' -f1 | sort -u | wc -l)
-    istio_metrics=$(grep -c "^istio_" "$metrics_tmpfile" || echo "0")
+    kiali_metrics=$(grep -E "${kiali_grep}" "$metrics_tmpfile" \
+        | cut -d'{' -f1 | cut -d' ' -f1 | sort -u | wc -l)
+
+    local kiali_label="Hiding Kiali" other_label="Hiding Others"
+    [[ "$show_kiali" == "true" ]] && kiali_label="Showing Kiali"
+    [[ "$show_other" == "true" ]] && other_label="Showing Others"
 
     echo ""
     echo -e "${BOLD}── Summary ──${NC}"
+    info "Metrics output: $kiali_label; $other_label"
     info "Total unique metric names: $total_metrics"
-    info "Istio metric lines (istio_*): $istio_metrics"
+    info "Kiali-relevant metric names: $kiali_metrics"
 
-    echo ""
-    echo -e "${BOLD}── Kiali-Relevant Metrics ──${NC}"
-    grep "^istio_requests_total\|^istio_request_duration\|^istio_request_bytes\|^istio_response_bytes\|^istio_tcp_sent\|^istio_tcp_received" "$metrics_tmpfile" \
-        | cut -d'{' -f1 | sort -u | while read -r name; do
-            local count
-            count=$(grep -c "^${name}" "$metrics_tmpfile")
-            echo "  $name ($count series)"
-        done
+    if [[ "$show_kiali" == "true" ]]; then
+        echo ""
+        echo -e "${BOLD}── Kiali-Relevant Metrics (istio_* + envoy_*) ──${NC}"
+        grep -E "${kiali_grep}" "$metrics_tmpfile" \
+            | cut -d'{' -f1 | cut -d' ' -f1 | sort -u | while read -r name; do
+                local count
+                count=$(grep -c "^${name}" "$metrics_tmpfile")
+                echo "  $name ($count timeseries)"
+            done
+    fi
 
-    echo ""
-    echo -e "${BOLD}── All Istio Metric Families ──${NC}"
-    grep "^istio_" "$metrics_tmpfile" | cut -d'{' -f1 | cut -d' ' -f1 | sort -u
+    if [[ "$show_other" == "true" ]]; then
+        echo ""
+        echo -e "${BOLD}── Other Metrics (not used by Kiali) ──${NC}"
+        local kiali_names
+        kiali_names=$(grep -E "${kiali_grep}" "$metrics_tmpfile" \
+            | cut -d'{' -f1 | cut -d' ' -f1 | sort -u)
+        local all_names
+        all_names=$(grep -v "^#" "$metrics_tmpfile" | grep -v "^$" \
+            | cut -d'{' -f1 | cut -d' ' -f1 | sort -u)
+        local other
+        other=$(comm -23 <(echo "$all_names") <(echo "$kiali_names"))
+        local other_count
+        other_count=$(echo "$other" | grep -c . || echo "0")
+        echo "  ($other_count metrics not used by Kiali)"
+        echo "$other" | while read -r name; do echo "  $name"; done
+    fi
 
     echo ""
     echo -e "${BOLD}── Sample: istio_requests_total ──${NC}"
@@ -777,6 +841,180 @@ do_metrics() {
     info "Full raw dump:"
     info "  oc port-forward -n $INGRESS_NAMESPACE $gateway_pod 15090:15090 &"
     info "  curl -s http://localhost:15090/stats/prometheus"
+    echo ""
+    info "Query Prometheus for stored metrics:"
+    info "  $0 prom                          # list all gateway metrics in Prometheus"
+    info "  $0 prom <metric_name>            # show labels + timeseries data"
+    info "  $0 prom istio_requests_total     # example"
+}
+
+do_prometheus() {
+    local metric_name=""
+    local timeseries_count=5
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --timeseries)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--timeseries requires a value: <n> or 'all'"
+                timeseries_count="$2"; shift; shift ;;
+            -h|--help)
+                echo "Usage: $(basename "$0") prom [options] [metric_name]"
+                echo ""
+                echo "Options:"
+                echo "  --timeseries <n|all>   Number of timeseries to show (default: 5, 0=none, all=all)"
+                echo ""
+                echo "Examples:"
+                echo "  $(basename "$0") prom                                      # list gateway metrics"
+                echo "  $(basename "$0") prom istio_requests_total                 # labels + 5 timeseries"
+                echo "  $(basename "$0") prom --timeseries 10 istio_requests_total    # 10 timeseries"
+                echo "  $(basename "$0") prom --timeseries all istio_requests_total   # all timeseries"
+                echo "  $(basename "$0") prom --timeseries 0 istio_requests_total     # labels only"
+                return 0
+                ;;
+            -*)  die "Unknown option: $1 (try: $0 prom --help)" ;;
+            *)   metric_name="$1"; shift ;;
+        esac
+    done
+
+    local thanos_url
+    thanos_url=$(oc get route thanos-querier -n "$MONITORING_NAMESPACE" \
+        -o jsonpath='https://{.spec.host}' 2>/dev/null)
+    [[ -z "$thanos_url" ]] && die "thanos-querier route not found in $MONITORING_NAMESPACE"
+
+    local token
+    token=$(oc whoami -t 2>/dev/null)
+    [[ -z "$token" ]] && die "Cannot obtain bearer token (oc whoami -t failed)"
+
+    # Metric names Kiali cares about — must match the PodMonitor keep regex
+    local envoy_names="envoy_cluster_upstream_cx_active|envoy_cluster_upstream_rq_total|envoy_listener_downstream_cx_active|envoy_listener_http_downstream_rq|envoy_server_memory_allocated|envoy_server_memory_heap_size|envoy_server_uptime"
+
+    if [[ -z "$metric_name" ]]; then
+        # ── List mode: show all gateway-related metric names in Prometheus ──
+        info "Querying thanos-querier for gateway metric names..."
+        local tmpfile
+        tmpfile=$(mktemp)
+
+        local http_code
+        http_code=$(curl -sk -o "$tmpfile" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            "${thanos_url}/api/v1/label/__name__/values" 2>/dev/null)
+
+        if [[ "$http_code" != "200" ]]; then
+            rm -f "$tmpfile"
+            die "thanos-querier returned HTTP $http_code (expected 200)"
+        fi
+
+        local names
+        names=$(python3 -c "
+import sys, json, re
+data = json.load(sys.stdin)
+envoy_re = re.compile(r'^($envoy_names)$')
+for name in sorted(data.get('data', [])):
+    if name.startswith('istio_') or envoy_re.match(name):
+        print(name)
+" < "$tmpfile")
+        rm -f "$tmpfile"
+
+        local count
+        count=$(echo "$names" | grep -c . || echo "0")
+
+        echo ""
+        if [[ "$count" -eq 0 ]]; then
+            warn "No gateway metrics found in Prometheus"
+            echo ""
+            info "Possible causes:"
+            info "  - No traffic generated yet (run: $0 traffic)"
+            info "  - PodMonitor not scraped yet (wait ~15-30s after install)"
+            info "  - PodMonitor missing (check: $0 status)"
+        else
+            echo -e "${BOLD}Gateway metrics in Prometheus ($count found):${NC}"
+            echo ""
+            echo "$names" | while read -r n; do echo "  $n"; done
+        fi
+        echo ""
+    else
+        # ── Detail mode: show labels and timeseries for a specific metric ──
+        info "Querying thanos-querier for metric: $metric_name"
+        local tmpfile
+        tmpfile=$(mktemp)
+
+        local http_code
+        http_code=$(curl -sk -o "$tmpfile" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            --data-urlencode "query=$metric_name" \
+            "${thanos_url}/api/v1/query" 2>/dev/null)
+
+        if [[ "$http_code" != "200" ]]; then
+            rm -f "$tmpfile"
+            die "thanos-querier returned HTTP $http_code (expected 200)"
+        fi
+
+        local result_count
+        result_count=$(python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(len(data.get('data', {}).get('result', [])))
+" < "$tmpfile")
+
+        if [[ "$result_count" -eq 0 ]]; then
+            rm -f "$tmpfile"
+            echo ""
+            warn "No timeseries found for '$metric_name'"
+            info "Check spelling or run: $0 prom  (to list available metrics)"
+            echo ""
+            return 0
+        fi
+
+        echo ""
+        echo -e "${BOLD}$metric_name — $result_count timeseries${NC}"
+        echo ""
+
+        echo -e "${BOLD}Labels and distinct values:${NC}"
+        python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+results = data.get('data', {}).get('result', [])
+skip = {'__name__', 'job', 'instance', 'container', 'endpoint', 'namespace',
+        'pod', 'prometheus', 'prometheus_replica', 'uid', 'service'}
+labels = {}
+for r in results:
+    for k, v in r.get('metric', {}).items():
+        if k not in skip:
+            labels.setdefault(k, set()).add(v)
+for k in sorted(labels):
+    vals = sorted(labels[k])
+    vstr = ', '.join(vals[:10] if len(vals) <= 10 else vals[:8])
+    if len(vals) <= 10:
+        print(f'  {k}: {vstr}')
+    else:
+        print(f'  {k}: {vstr} ... ({len(vals)} total)')
+" < "$tmpfile"
+
+        if [[ "$timeseries_count" == "all" || "$timeseries_count" -gt 0 ]]; then
+            local ts_label="$timeseries_count"
+            [[ "$timeseries_count" == "all" ]] && ts_label="all $result_count"
+            echo ""
+            echo -e "${BOLD}Timeseries data ($ts_label):${NC}"
+            local ts_slice="$timeseries_count"
+            [[ "$timeseries_count" == "all" ]] && ts_slice=""
+            python3 -c "
+import sys, json
+limit = '$ts_slice'
+data = json.load(sys.stdin)
+results = data.get('data', {}).get('result', [])
+subset = results if not limit else results[:int(limit)]
+for r in subset:
+    m = r.get('metric', {})
+    val = r.get('value', [None, ''])[1]
+    lbl = ', '.join(f'{k}=\"{v}\"' for k, v in sorted(m.items()) if k != '__name__')
+    name = m.get('__name__', '?')
+    print(f'  {name}{{{lbl}}} {val}')
+" < "$tmpfile"
+        fi
+
+        rm -f "$tmpfile"
+        echo ""
+    fi
 }
 
 do_status() {
@@ -954,7 +1192,8 @@ usage() {
     echo "Commands:"
     echo "  install              Install all components"
     echo "  traffic [options]    Generate traffic (try: traffic --help)"
-    echo "  metrics              Dump raw Envoy metrics from gateway proxy"
+    echo "  scrape [options]     Dump raw Envoy metrics (try: scrape --help)"
+    echo "  prom [options] [metric]  Query Prometheus for gateway metrics (try: prom --help)"
     echo "  status               Show status of all components"
     echo "  urls                 Print access URLs"
     echo "  uninstall            Remove all components"
@@ -972,8 +1211,10 @@ usage() {
     echo "  $(basename "$0") install                    # install everything"
     echo "  $(basename "$0") traffic -d 120 -r 5        # 120s at 5 req/s, clean"
     echo "  $(basename "$0") traffic -d 30 -e           # 30s with 404 error paths"
-    echo "  $(basename "$0") metrics                    # see raw gateway metrics"
-    echo "  $(basename "$0") metrics > gateway-metrics.txt"
+    echo "  $(basename "$0") scrape                     # Kiali-relevant metrics only"
+    echo "  $(basename "$0") scrape --other show        # include other proxy metrics"
+    echo "  $(basename "$0") prom                       # list gateway metrics in Prometheus"
+    echo "  $(basename "$0") prom istio_requests_total   # show labels + timeseries data"
     echo "  $(basename "$0") uninstall                  # clean up"
     echo ""
 }
@@ -981,11 +1222,12 @@ usage() {
 # ── Entry Point ────────────────────────────────────────────────────────────────
 
 case "${1:-help}" in
-    install)   do_install ;;
-    traffic)   shift; do_traffic "$@" ;;
-    metrics)   do_metrics ;;
-    status)    do_status ;;
-    urls)      do_urls ;;
-    uninstall) do_uninstall ;;
-    help|*)    usage ;;
+    install)          do_install ;;
+    traffic)          shift; do_traffic "$@" ;;
+    scrape)           shift; do_scrape "$@" ;;
+    prom|prometheus)  shift; do_prometheus "$@" ;;
+    status)           do_status ;;
+    urls)             do_urls ;;
+    uninstall)        do_uninstall ;;
+    help|*)           usage ;;
 esac
