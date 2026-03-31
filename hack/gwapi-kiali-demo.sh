@@ -19,7 +19,7 @@
 #
 # Usage:
 #   ./gwapi-kiali-demo.sh install      Install all components
-#   ./gwapi-kiali-demo.sh traffic      Generate traffic through the gateway
+#   ./gwapi-kiali-demo.sh traffic      Generate clean traffic (try: traffic --help)
 #   ./gwapi-kiali-demo.sh metrics      Dump raw Envoy metrics from the gateway proxy
 #   ./gwapi-kiali-demo.sh status       Show status of all components
 #   ./gwapi-kiali-demo.sh urls         Print access URLs
@@ -627,8 +627,32 @@ do_install() {
 }
 
 do_traffic() {
-    local duration="${1:-10}"
-    local rate="${2:-2}"
+    local duration=10
+    local rate=2
+    local include_errors=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -d|--duration)    duration="$2"; shift; shift ;;
+            -r|--rate)        rate="$2"; shift; shift ;;
+            -e|--errors)      include_errors=true; shift ;;
+            -h|--help)
+                echo "Usage: $(basename "$0") traffic [options]"
+                echo ""
+                echo "Options:"
+                echo "  -d, --duration <sec>  Duration in seconds (default: 10)"
+                echo "  -r, --rate <rps>      Requests per second (default: 2)"
+                echo "  -e, --errors          Include requests to bad paths (404s)"
+                echo ""
+                echo "Examples:"
+                echo "  $(basename "$0") traffic                     # 10s, 2 rps, clean traffic"
+                echo "  $(basename "$0") traffic -d 60 -r 5          # 60s, 5 rps, clean traffic"
+                echo "  $(basename "$0") traffic -d 30 -e            # 30s with some 404 errors"
+                return 0
+                ;;
+            *)  die "Unknown option: $1 (try: $0 traffic --help)" ;;
+        esac
+    done
 
     detect_cluster_domain
 
@@ -639,7 +663,13 @@ do_traffic() {
 
     [[ -z "$gateway_svc" ]] && die "Gateway service not found. Run '$0 install' first."
 
-    info "Generating traffic for ${duration}s at ~${rate} req/s"
+    local paths=("/" "/index.html")
+    if [[ "$include_errors" == "true" ]]; then
+        paths+=("/noexist" "/icons/" "/api/health")
+        info "Generating traffic for ${duration}s at ~${rate} req/s (with error paths)"
+    else
+        info "Generating traffic for ${duration}s at ~${rate} req/s (clean)"
+    fi
     info "Target: $GATEWAY_HOSTNAME via port-forward to $gateway_svc"
 
     # Kill any stale port-forward on this port from a previous run
@@ -649,13 +679,11 @@ do_traffic() {
 
     oc port-forward -n "$INGRESS_NAMESPACE" "svc/$gateway_svc" 18080:80 &>/dev/null &
     local pf_pid=$!
-    # Bake the PID into the trap string so it works after the function returns
     trap "kill $pf_pid 2>/dev/null; wait $pf_pid 2>/dev/null || true" EXIT
     sleep 2
 
     kill -0 "$pf_pid" 2>/dev/null || die "Port-forward failed to start"
 
-    local paths=("/" "/index.html" "/noexist" "/icons/" "/api/health")
     local count=0 errors=0
     local end_time=$((SECONDS + duration))
     local sleep_interval
@@ -921,7 +949,7 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  install              Install all components"
-    echo "  traffic [dur] [rps]  Generate traffic (default: 10s at 2 req/s)"
+    echo "  traffic [options]    Generate traffic (try: traffic --help)"
     echo "  metrics              Dump raw Envoy metrics from gateway proxy"
     echo "  status               Show status of all components"
     echo "  urls                 Print access URLs"
@@ -938,7 +966,8 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  $(basename "$0") install                    # install everything"
-    echo "  $(basename "$0") traffic 120 5              # 120s at 5 req/s"
+    echo "  $(basename "$0") traffic -d 120 -r 5        # 120s at 5 req/s, clean"
+    echo "  $(basename "$0") traffic -d 30 -e           # 30s with 404 error paths"
     echo "  $(basename "$0") metrics                    # see raw gateway metrics"
     echo "  $(basename "$0") metrics > gateway-metrics.txt"
     echo "  $(basename "$0") uninstall                  # clean up"
@@ -949,7 +978,7 @@ usage() {
 
 case "${1:-help}" in
     install)   do_install ;;
-    traffic)   do_traffic "${2:-}" "${3:-}" ;;
+    traffic)   shift; do_traffic "$@" ;;
     metrics)   do_metrics ;;
     status)    do_status ;;
     urls)      do_urls ;;
