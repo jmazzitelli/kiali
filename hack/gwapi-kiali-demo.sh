@@ -482,7 +482,7 @@ spec:
     interval: 15s
     metricRelabelings:
     - sourceLabels: [__name__]
-      regex: istio_.*
+      regex: istio_.*|envoy_cluster_upstream_cx_active|envoy_cluster_upstream_rq_total|envoy_listener_downstream_cx_active|envoy_listener_http_downstream_rq|envoy_server_memory_allocated|envoy_server_memory_heap_size|envoy_server_uptime
       action: keep
 YAML
 
