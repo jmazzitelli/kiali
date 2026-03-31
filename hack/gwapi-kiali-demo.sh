@@ -590,6 +590,29 @@ spec:
 YAML
 
     wait_for_deployment "$KIALI_NAME" "$KIALI_NAMESPACE" 300
+
+    header "Kiali Monitoring Access"
+
+    local kiali_sa="${KIALI_NAME}-service-account"
+    if oc get clusterrolebinding kiali-monitoring-view &>/dev/null; then
+        warn "ClusterRoleBinding kiali-monitoring-view already exists — skipping"
+    else
+        oc apply -f - <<CRB
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kiali-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+- kind: ServiceAccount
+  name: ${kiali_sa}
+  namespace: ${KIALI_NAMESPACE}
+CRB
+        ok "Granted cluster-monitoring-view to ${kiali_sa} in ${KIALI_NAMESPACE}"
+    fi
 }
 
 # ── Main Commands ──────────────────────────────────────────────────────────────
@@ -775,6 +798,12 @@ do_status() {
     header "Kiali"
     oc get kiali -n "$KIALI_NAMESPACE" --no-headers 2>/dev/null || echo "  (not found)"
     oc get pods -n "$KIALI_NAMESPACE" -l app=kiali --no-headers 2>/dev/null
+    echo "  Monitoring access (cluster-monitoring-view):"
+    if oc get clusterrolebinding kiali-monitoring-view &>/dev/null; then
+        echo "    ClusterRoleBinding kiali-monitoring-view exists"
+    else
+        echo "    NOT configured — Kiali cannot query thanos-querier"
+    fi
 
     header "Monitoring"
     echo "  Cluster Monitoring:"
@@ -835,6 +864,9 @@ do_uninstall() {
     echo ""
 
     set +e
+
+    info "Removing Kiali monitoring access..."
+    oc delete clusterrolebinding kiali-monitoring-view --ignore-not-found 2>/dev/null
 
     info "Removing Kiali CR..."
     oc delete kiali "$KIALI_NAME" -n "$KIALI_NAMESPACE" --ignore-not-found --timeout=60s 2>/dev/null
