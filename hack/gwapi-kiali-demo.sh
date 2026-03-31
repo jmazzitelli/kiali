@@ -6,7 +6,7 @@
 # produces and how Kiali can observe them — without a full Istio mesh.
 #
 # Installs:
-#   - OSSM 3.x operator (provides Gateway API CRDs and the Istio control plane)
+#   - OSSM 3.x operator (provides Istio/Sail CRDs needed by the Ingress Operator)
 #   - GatewayClass + Gateway (triggers a lightweight Istio in openshift-ingress)
 #   - Plain demo app (no sidecars) + HTTPRoute
 #   - User workload monitoring (enables it if not already active)
