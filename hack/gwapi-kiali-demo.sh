@@ -480,6 +480,10 @@ spec:
   - port: metrics
     path: /stats/prometheus
     interval: 15s
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: istio_.*
+      action: keep
 YAML
 
     ok "PodMonitor gateway-istio-monitor created in ${INGRESS_NAMESPACE}"
