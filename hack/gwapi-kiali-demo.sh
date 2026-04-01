@@ -289,15 +289,40 @@ deploy_demo_app() {
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ${APP_NAME}-content
+  name: ${APP_NAME}-server
   namespace: ${APP_NAMESPACE}
 data:
-  index.html: |
-    <!DOCTYPE html>
+  http_server.py: |
+    import http.server
+    import time
+
+    DELAY_SEC = 0.1
+
+    HTML = b"""<!DOCTYPE html>
     <html><body>
     <h1>Gateway API Demo</h1>
     <p>Traffic reached the backend through the OpenShift ingress gateway.</p>
-    </body></html>
+    </body></html>"""
+
+    class SlowHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            time.sleep(DELAY_SEC)
+            if self.path in ('/', '/index.html'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.end_headers()
+                self.write(HTML)
+            else:
+                self.send_response(404)
+                self.end_headers()
+        def log_message(self, fmt, *args):
+            pass
+        def write(self, data):
+            self.wfile.write(data)
+
+    httpd = http.server.HTTPServer(('', 8080), SlowHandler)
+    print('HTTP server listening on :8080', flush=True)
+    httpd.serve_forever()
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -320,8 +345,9 @@ spec:
         version: v1
     spec:
       containers:
-      - name: httpd
-        image: registry.access.redhat.com/ubi9/httpd-24:latest
+      - name: http-server
+        image: registry.access.redhat.com/ubi9/python-311:latest
+        command: ["python3", "/app/http_server.py"]
         ports:
         - containerPort: 8080
           name: http
@@ -333,12 +359,12 @@ spec:
             cpu: 200m
             memory: 128Mi
         volumeMounts:
-        - name: content
-          mountPath: /var/www/html
+        - name: server
+          mountPath: /app
       volumes:
-      - name: content
+      - name: server
         configMap:
-          name: ${APP_NAME}-content
+          name: ${APP_NAME}-server
 ---
 apiVersion: v1
 kind: Service
@@ -403,12 +429,20 @@ data:
     exec python3 /app/grpc_server.py
   grpc_server.py: |
     from concurrent import futures
+    import time
     import grpc
     from grpc_health.v1 import health, health_pb2, health_pb2_grpc
     from grpc_reflection.v1alpha import reflection
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
-    health_servicer = health.HealthServicer()
+    DELAY_SEC = 0.1
+
+    class SlowHealthServicer(health.HealthServicer):
+        def Check(self, request, context):
+            time.sleep(DELAY_SEC)
+            return super().Check(request, context)
+
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    health_servicer = SlowHealthServicer()
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
 
     SERVICE_NAMES = (
