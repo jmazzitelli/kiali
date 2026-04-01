@@ -8,7 +8,8 @@
 # Installs:
 #   - OSSM 3.x operator (provides Istio/Sail CRDs needed by the Ingress Operator)
 #   - GatewayClass + Gateway (triggers a lightweight Istio in openshift-ingress)
-#   - Plain demo app (no sidecars) + HTTPRoute
+#   - HTTP demo app (no sidecars) + HTTPRoute
+#   - gRPC demo app (Python health-check server) + GRPCRoute
 #   - User workload monitoring (enables it if not already active)
 #   - PodMonitor in openshift-ingress so the *platform* Prometheus scrapes
 #     Istio/Envoy metrics from the gateway proxy.  This is an NE-1113
@@ -19,9 +20,9 @@
 #
 # Usage:
 #   ./gwapi-kiali-demo.sh install      Install all components
-#   ./gwapi-kiali-demo.sh traffic      Generate clean traffic (try: traffic --help)
+#   ./gwapi-kiali-demo.sh traffic      Generate HTTP+gRPC traffic (try: traffic --help)
 #   ./gwapi-kiali-demo.sh scrape       Dump raw Envoy metrics from the gateway proxy
-#   ./gwapi-kiali-demo.sh prom        Query Prometheus for gateway metrics (alias: prometheus)
+#   ./gwapi-kiali-demo.sh prom         Query Prometheus for gateway metrics (alias: prometheus)
 #   ./gwapi-kiali-demo.sh status       Show status of all components
 #   ./gwapi-kiali-demo.sh urls         Print access URLs
 #   ./gwapi-kiali-demo.sh uninstall    Remove all components
@@ -29,6 +30,7 @@
 # Requirements:
 #   - oc CLI logged into an OpenShift 4.19+ cluster
 #   - Cluster monitoring must be enabled
+#   - grpcurl (optional, needed for gRPC traffic generation)
 #
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -41,10 +43,13 @@ GATEWAY_NAME="demo-gateway"
 GATEWAY_CLASS_NAME="openshift-default"
 HTTPROUTE_NAME="demo-route"
 APP_NAME="demo-app"
+GRPC_APP_NAME="grpc-app"
+GRPC_ROUTE_NAME="grpc-route"
 KIALI_NAME="kiali"
 
 CLUSTER_DOMAIN=""
 GATEWAY_HOSTNAME=""
+GRPC_HOSTNAME=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -156,6 +161,7 @@ detect_cluster_domain() {
         -o jsonpath='{.spec.domain}' 2>/dev/null)
     [[ -z "$CLUSTER_DOMAIN" ]] && die "Cannot detect cluster domain"
     GATEWAY_HOSTNAME="demo.gwapi.${CLUSTER_DOMAIN}"
+    GRPC_HOSTNAME="grpc.gwapi.${CLUSTER_DOMAIN}"
 }
 
 check_prerequisites() {
@@ -175,6 +181,12 @@ check_prerequisites() {
         ok "Cluster monitoring is available"
     else
         die "Cluster monitoring is NOT available. It must be enabled before running this script."
+    fi
+
+    if command -v grpcurl &>/dev/null; then
+        ok "grpcurl is available"
+    else
+        warn "'grpcurl' not found — gRPC traffic generation will not work"
     fi
 
     ok "Prerequisites passed"
@@ -375,6 +387,126 @@ YAML
     ok "HTTPRoute $HTTPROUTE_NAME created"
 }
 
+deploy_grpc_app() {
+    header "gRPC Demo Application"
+
+    oc apply -f - <<YAML
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${GRPC_APP_NAME}-server
+  namespace: ${APP_NAMESPACE}
+data:
+  start.sh: |
+    #!/bin/sh
+    pip install --quiet grpcio grpcio-health-checking grpcio-reflection
+    exec python3 /app/grpc_server.py
+  grpc_server.py: |
+    from concurrent import futures
+    import grpc
+    from grpc_health.v1 import health, health_pb2, health_pb2_grpc
+    from grpc_reflection.v1alpha import reflection
+
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    health_servicer = health.HealthServicer()
+    health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
+
+    SERVICE_NAMES = (
+        health_pb2.DESCRIPTOR.services_by_name['Health'].full_name,
+        reflection.SERVICE_NAME,
+    )
+    reflection.enable_server_reflection(SERVICE_NAMES, server)
+
+    server.add_insecure_port('[::]:50051')
+    print('gRPC server listening on :50051', flush=True)
+    server.start()
+    server.wait_for_termination()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${GRPC_APP_NAME}
+  namespace: ${APP_NAMESPACE}
+  labels:
+    app: ${GRPC_APP_NAME}
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${GRPC_APP_NAME}
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: ${GRPC_APP_NAME}
+        version: v1
+    spec:
+      containers:
+      - name: grpc-server
+        image: registry.access.redhat.com/ubi9/python-311:latest
+        command: ["/bin/sh", "/app/start.sh"]
+        ports:
+        - containerPort: 50051
+          name: grpc
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        volumeMounts:
+        - name: server
+          mountPath: /app
+      volumes:
+      - name: server
+        configMap:
+          name: ${GRPC_APP_NAME}-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${GRPC_APP_NAME}
+  namespace: ${APP_NAMESPACE}
+  labels:
+    app: ${GRPC_APP_NAME}
+spec:
+  selector:
+    app: ${GRPC_APP_NAME}
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+YAML
+
+    wait_for_deployment "$GRPC_APP_NAME" "$APP_NAMESPACE" 180
+}
+
+create_grpc_route() {
+    header "GRPCRoute"
+
+    oc apply -f - <<YAML
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: ${GRPC_ROUTE_NAME}
+  namespace: ${APP_NAMESPACE}
+spec:
+  parentRefs:
+  - name: ${GATEWAY_NAME}
+    namespace: ${INGRESS_NAMESPACE}
+  hostnames:
+  - "${GRPC_HOSTNAME}"
+  rules:
+  - backendRefs:
+    - name: ${GRPC_APP_NAME}
+      port: 50051
+YAML
+
+    ok "GRPCRoute $GRPC_ROUTE_NAME created"
+}
+
 test_gateway() {
     header "Gateway Connectivity Test"
 
@@ -402,13 +534,23 @@ test_gateway() {
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
         -H "Host: $GATEWAY_HOSTNAME" http://localhost:18080/ 2>/dev/null || echo "000")
 
-    kill "$pf_pid" 2>/dev/null; wait "$pf_pid" 2>/dev/null || true
-
     if [[ "$code" == "200" ]]; then
-        ok "Gateway returned HTTP $code — traffic flows end to end"
+        ok "HTTP: Gateway returned $code — traffic flows end to end"
     else
-        warn "Gateway returned HTTP $code — may need a moment to converge"
+        warn "HTTP: Gateway returned $code — may need a moment to converge"
     fi
+
+    if command -v grpcurl &>/dev/null; then
+        local grpc_out
+        grpc_out=$(grpcurl -plaintext -authority "$GRPC_HOSTNAME" \
+            localhost:18080 grpc.health.v1.Health/Check 2>&1) && \
+            ok "gRPC: Health check passed" || \
+            warn "gRPC: Health check failed — may need a moment to converge ($grpc_out)"
+    else
+        warn "gRPC: skipping — grpcurl not installed"
+    fi
+
+    kill "$pf_pid" 2>/dev/null; wait "$pf_pid" 2>/dev/null || true
 }
 
 setup_monitoring() {
@@ -614,6 +756,8 @@ do_install() {
     create_gateway
     deploy_demo_app
     create_httproute
+    deploy_grpc_app
+    create_grpc_route
     test_gateway
     setup_monitoring
     install_kiali
@@ -626,39 +770,76 @@ do_install() {
     do_urls
     echo ""
     info "Next steps:"
-    info "  1. Generate traffic:  $0 traffic"
-    info "  2. Raw proxy scrape:  $0 scrape"
-    info "  3. Prometheus query:  $0 prom"
-    info "  4. Open Kiali UI and explore the graph"
+    info "  1. Generate traffic (HTTP+gRPC):  $0 traffic"
+    info "  2. Generate gRPC only:            $0 traffic --http false"
+    info "  3. Raw proxy scrape:              $0 scrape"
+    info "  4. Prometheus query:              $0 prom"
+    info "  5. Open Kiali UI and explore the graph"
 }
 
 do_traffic() {
     local duration=10
     local rate=2
-    local include_errors=false
+    local error_pct=0
+    local use_http=true
+    local use_grpc=true
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -d|--duration)    duration="$2"; shift; shift ;;
             -r|--rate)        rate="$2"; shift; shift ;;
-            -e|--errors)      include_errors=true; shift ;;
+            -e|--errors)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--errors requires a value: 0-100"
+                if ! [[ "$2" =~ ^[0-9]+$ ]] || (( $2 < 0 || $2 > 100 )); then
+                    die "--errors must be a number between 0 and 100"
+                fi
+                error_pct="$2"
+                shift; shift ;;
+            --http)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--http requires a value: true|false"
+                case "$2" in
+                    true)  use_http=true ;;
+                    false) use_http=false ;;
+                    *)     die "--http value must be 'true' or 'false'" ;;
+                esac
+                shift; shift ;;
+            --grpc)
+                [[ -z "${2:-}" || "$2" == --* ]] && die "--grpc requires a value: true|false"
+                case "$2" in
+                    true)  use_grpc=true ;;
+                    false) use_grpc=false ;;
+                    *)     die "--grpc value must be 'true' or 'false'" ;;
+                esac
+                shift; shift ;;
             -h|--help)
                 echo "Usage: $(basename "$0") traffic [options]"
                 echo ""
                 echo "Options:"
-                echo "  -d, --duration <sec>  Duration in seconds (default: 10)"
-                echo "  -r, --rate <rps>      Requests per second (default: 2)"
-                echo "  -e, --errors          Include requests to bad paths (404s)"
+                echo "  -d, --duration <sec>   Duration in seconds (default: 10)"
+                echo "  -r, --rate <rps>       Requests per second (default: 2)"
+                echo "  -e, --errors <0-100>   Percentage of requests that are errors (default: 0)"
+                echo "      --http true|false  Generate HTTP traffic (default: true)"
+                echo "      --grpc true|false  Generate gRPC traffic (default: true)"
                 echo ""
                 echo "Examples:"
-                echo "  $(basename "$0") traffic                     # 10s, 2 rps, clean traffic"
-                echo "  $(basename "$0") traffic -d 60 -r 5          # 60s, 5 rps, clean traffic"
-                echo "  $(basename "$0") traffic -d 30 -e            # 30s with some 404 errors"
+                echo "  $(basename "$0") traffic                           # 10s, HTTP+gRPC, 2 rps, no errors"
+                echo "  $(basename "$0") traffic -d 60 -r 5                # 60s, HTTP+gRPC, 5 rps"
+                echo "  $(basename "$0") traffic --errors 25               # 25% of requests are errors"
+                echo "  $(basename "$0") traffic --grpc false              # HTTP only"
+                echo "  $(basename "$0") traffic --http false              # gRPC only"
+                echo "  $(basename "$0") traffic --http false --errors 50  # gRPC only, 50% errors"
                 return 0
                 ;;
             *)  die "Unknown option: $1 (try: $0 traffic --help)" ;;
         esac
     done
+
+    [[ "$use_http" == "false" && "$use_grpc" == "false" ]] && \
+        die "Both --http and --grpc are false — nothing to generate"
+
+    if [[ "$use_grpc" == "true" ]]; then
+        command -v grpcurl &>/dev/null || die "'grpcurl' is required for gRPC traffic. Install it and retry."
+    fi
 
     detect_cluster_domain
 
@@ -669,16 +850,15 @@ do_traffic() {
 
     [[ -z "$gateway_svc" ]] && die "Gateway service not found. Run '$0 install' first."
 
-    local paths=("/" "/index.html")
-    if [[ "$include_errors" == "true" ]]; then
-        paths+=("/noexist" "/icons/" "/api/health")
-        info "Generating traffic for ${duration}s at ~${rate} req/s (with error paths)"
-    else
-        info "Generating traffic for ${duration}s at ~${rate} req/s (clean)"
-    fi
-    info "Target: $GATEWAY_HOSTNAME via port-forward to $gateway_svc"
+    local protos=""
+    [[ "$use_http" == "true" ]] && protos="HTTP"
+    [[ "$use_grpc" == "true" ]] && protos="${protos:+$protos+}gRPC"
+    local errors_label="no errors"
+    (( error_pct > 0 )) && errors_label="${error_pct}% errors"
 
-    # Kill any stale port-forward on this port from a previous run
+    info "Generating $protos traffic for ${duration}s at ~${rate} req/s ($errors_label)"
+    info "Gateway: $gateway_svc"
+
     local stale_pf
     stale_pf=$(lsof -ti :18080 2>/dev/null || true)
     [[ -n "$stale_pf" ]] && kill $stale_pf 2>/dev/null && sleep 1
@@ -690,31 +870,94 @@ do_traffic() {
 
     kill -0 "$pf_pid" 2>/dev/null || die "Port-forward failed to start"
 
-    local count=0 errors=0
+    local http_count=0 http_errors=0
+    local grpc_count=0 grpc_errors=0
+    local request_num=0
     local end_time=$((SECONDS + duration))
     local sleep_interval
     sleep_interval=$(awk "BEGIN {printf \"%.3f\", 1/$rate}")
 
+    # Per-protocol error interval: every Nth request of that protocol is an error.
+    # error_pct=0 → never, error_pct=100 → every request.
+    local error_interval=0
+    if (( error_pct > 0 && error_pct < 100 )); then
+        error_interval=$(( 100 / error_pct ))
+    fi
+
     echo ""
     while [[ $SECONDS -lt $end_time ]]; do
-        local idx=$((RANDOM % ${#paths[@]}))
-        local code
-        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-            -H "Host: $GATEWAY_HOSTNAME" \
-            "http://localhost:18080${paths[$idx]}" 2>/dev/null || echo "000")
-        count=$((count + 1))
-        [[ "$code" != "200" ]] && errors=$((errors + 1))
-        printf "\r  Requests: %d | Non-200: %d | Last: %s | Remaining: %ds  " \
-            "$count" "$errors" "$code" "$((end_time - SECONDS))"
+        request_num=$((request_num + 1))
+
+        if [[ "$use_http" == "true" && "$use_grpc" == "true" ]]; then
+            if (( request_num % 2 == 1 )); then
+                _traffic_send_http
+            else
+                _traffic_send_grpc
+            fi
+        elif [[ "$use_http" == "true" ]]; then
+            _traffic_send_http
+        else
+            _traffic_send_grpc
+        fi
+
+        local total=$(( http_count + grpc_count ))
+        local total_errors=$(( http_errors + grpc_errors ))
+        local status_line=""
+        [[ "$use_http" == "true" ]] && status_line="HTTP: ${http_count}(${http_errors}err)"
+        [[ "$use_grpc" == "true" ]] && status_line="${status_line:+$status_line | }gRPC: ${grpc_count}(${grpc_errors}err)"
+        printf "\r  %s | Total: %d | Remaining: %ds  " \
+            "$status_line" "$total" "$((end_time - SECONDS))"
         sleep "$sleep_interval"
     done
 
     echo ""
     echo ""
-    ok "Traffic complete: $count requests ($errors non-200)"
+    local total=$(( http_count + grpc_count ))
+    local total_errors=$(( http_errors + grpc_errors ))
+    [[ "$use_http" == "true" ]] && ok "HTTP:  $http_count requests ($http_errors errors)"
+    [[ "$use_grpc" == "true" ]] && ok "gRPC:  $grpc_count requests ($grpc_errors errors)"
+    ok "Total: $total requests ($total_errors errors)"
 
     kill "$pf_pid" 2>/dev/null; wait "$pf_pid" 2>/dev/null || true
     trap - EXIT
+}
+
+_traffic_send_http() {
+    http_count=$((http_count + 1))
+    local send_error=false
+    if (( error_pct == 100 )); then
+        send_error=true
+    elif (( error_interval > 0 )) && (( http_count % error_interval == 0 )); then
+        send_error=true
+    fi
+    local path="/"
+    if [[ "$send_error" == "true" ]]; then
+        path="/noexist"
+    else
+        local good_paths=("/" "/index.html")
+        path="${good_paths[$(( (http_count - 1) % ${#good_paths[@]} ))]}"
+    fi
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        -H "Host: $GATEWAY_HOSTNAME" \
+        "http://localhost:18080${path}" 2>/dev/null || echo "000")
+    [[ "$code" != "200" ]] && http_errors=$((http_errors + 1))
+}
+
+_traffic_send_grpc() {
+    grpc_count=$((grpc_count + 1))
+    local send_error=false
+    if (( error_pct == 100 )); then
+        send_error=true
+    elif (( error_interval > 0 )) && (( grpc_count % error_interval == 0 )); then
+        send_error=true
+    fi
+    local method="grpc.health.v1.Health/Check"
+    [[ "$send_error" == "true" ]] && method="grpc.health.v1.Health/Bogus"
+    local grpc_ok=true
+    grpcurl -plaintext -authority "$GRPC_HOSTNAME" \
+        localhost:18080 "$method" &>/dev/null || grpc_ok=false
+    [[ "$grpc_ok" == "false" ]] && grpc_errors=$((grpc_errors + 1))
 }
 
 do_scrape() {
@@ -1037,8 +1280,13 @@ do_status() {
     header "HTTPRoute"
     oc get httproute -n "$APP_NAMESPACE" --no-headers 2>/dev/null || echo "  (not found)"
 
-    header "Demo App ($APP_NAMESPACE)"
-    oc get pods -n "$APP_NAMESPACE" --no-headers 2>/dev/null || echo "  (namespace not found)"
+    header "GRPCRoute"
+    oc get grpcroute -n "$APP_NAMESPACE" --no-headers 2>/dev/null || echo "  (not found)"
+
+    header "Demo Apps ($APP_NAMESPACE)"
+    oc get deploy,svc -n "$APP_NAMESPACE" --no-headers 2>/dev/null || echo "  (namespace not found)"
+    echo "  Pods:"
+    oc get pods -n "$APP_NAMESPACE" --no-headers 2>/dev/null || echo "    (none)"
 
     header "Kiali"
     oc get kiali -n "$KIALI_NAMESPACE" --no-headers 2>/dev/null || echo "  (not found)"
@@ -1091,13 +1339,19 @@ do_urls() {
     echo ""
     echo -e "${BOLD}Access URLs${NC}"
     echo ""
-    echo "  Kiali UI:       ${kiali_url:-(not installed)}"
-    echo "  Gateway host:   ${GATEWAY_HOSTNAME:-unknown}"
+    echo "  Kiali UI:        ${kiali_url:-(not installed)}"
+    echo "  HTTP hostname:   ${GATEWAY_HOSTNAME:-unknown}"
+    echo "  gRPC hostname:   ${GRPC_HOSTNAME:-unknown}"
     echo ""
     if [[ -n "$gateway_svc" ]]; then
-        echo "  To reach the demo app through the gateway:"
+        echo "  To reach the demo apps, first port-forward to the gateway:"
         echo "    oc port-forward -n $INGRESS_NAMESPACE svc/$gateway_svc 8080:80 &"
+        echo ""
+        echo "  Then test HTTP:"
         echo "    curl -H 'Host: ${GATEWAY_HOSTNAME:-HOSTNAME}' http://localhost:8080/"
+        echo ""
+        echo "  Or test gRPC:"
+        echo "    grpcurl -plaintext -authority '${GRPC_HOSTNAME:-HOSTNAME}' localhost:8080 grpc.health.v1.Health/Check"
     else
         echo "  Gateway service not found. Run '$0 install' first."
     fi
@@ -1132,6 +1386,9 @@ do_uninstall() {
 
     info "Removing gateway metrics PodMonitor (NE-1113 workaround)..."
     oc delete podmonitor gateway-istio-monitor -n "$INGRESS_NAMESPACE" --ignore-not-found 2>/dev/null
+
+    info "Removing GRPCRoute..."
+    oc delete grpcroute "$GRPC_ROUTE_NAME" -n "$APP_NAMESPACE" --ignore-not-found 2>/dev/null
 
     info "Removing HTTPRoute..."
     oc delete httproute "$HTTPROUTE_NAME" -n "$APP_NAMESPACE" --ignore-not-found 2>/dev/null
@@ -1190,8 +1447,8 @@ usage() {
     echo "Usage: $(basename "$0") <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  install              Install all components"
-    echo "  traffic [options]    Generate traffic (try: traffic --help)"
+    echo "  install              Install all components (HTTP + gRPC demo apps)"
+    echo "  traffic [options]    Generate HTTP or gRPC traffic (try: traffic --help)"
     echo "  scrape [options]     Dump raw Envoy metrics (try: scrape --help)"
     echo "  prom [options] [metric]  Query Prometheus for gateway metrics (try: prom --help)"
     echo "  status               Show status of all components"
@@ -1201,7 +1458,8 @@ usage() {
     echo "What gets installed (minimal — no full Istio mesh):"
     echo "  - OSSM 3.x operator (provides CRDs + Istio control plane)"
     echo "  - GatewayClass + Gateway in openshift-ingress"
-    echo "  - Plain demo app (no sidecar) + HTTPRoute"
+    echo "  - HTTP demo app (no sidecar) + HTTPRoute"
+    echo "  - gRPC demo app (Python health-check server) + GRPCRoute"
     echo "  - User workload monitoring (if not already enabled)"
     echo "  - PodMonitor in openshift-ingress for gateway metrics (NE-1113 workaround)"
     echo "  - Kiali operator + CR (queries thanos-querier for metrics)"
@@ -1209,12 +1467,15 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  $(basename "$0") install                    # install everything"
-    echo "  $(basename "$0") traffic -d 120 -r 5        # 120s at 5 req/s, clean"
-    echo "  $(basename "$0") traffic -d 30 -e           # 30s with 404 error paths"
+    echo "  $(basename "$0") traffic                    # 10s HTTP+gRPC, 2 rps, no errors"
+    echo "  $(basename "$0") traffic -d 60 -r 5         # 60s HTTP+gRPC, 5 rps"
+    echo "  $(basename "$0") traffic --errors 25        # 25% of requests are errors"
+    echo "  $(basename "$0") traffic --grpc false       # HTTP only"
+    echo "  $(basename "$0") traffic --http false       # gRPC only"
     echo "  $(basename "$0") scrape                     # Kiali-relevant metrics only"
     echo "  $(basename "$0") scrape --other show        # include other proxy metrics"
     echo "  $(basename "$0") prom                       # list gateway metrics in Prometheus"
-    echo "  $(basename "$0") prom istio_requests_total   # show labels + timeseries data"
+    echo "  $(basename "$0") prom istio_requests_total  # show labels + timeseries data"
     echo "  $(basename "$0") uninstall                  # clean up"
     echo ""
 }
