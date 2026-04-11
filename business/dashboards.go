@@ -13,6 +13,7 @@ import (
 	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/prometheus"
+	utilcontext "github.com/kiali/kiali/util/context"
 )
 
 const defaultNamespaceLabel = "namespace"
@@ -171,6 +172,7 @@ func (in *DashboardsService) GetDashboard(ctx context.Context, params models.Das
 	}
 
 	filters := in.buildLabelsQueryString(params.Namespace, params.LabelsFilters)
+	ctx = utilcontext.SetTenancyNamespace(ctx, params.Namespace)
 	aggLabels := append(params.AdditionalLabels, models.ConvertAggregations(*dashboard)...)
 	if len(aggLabels) == 0 {
 		// Prevent null in json
@@ -308,6 +310,7 @@ func (in *DashboardsService) buildRuntimesList(templatesNames []string) []models
 }
 
 func (in *DashboardsService) fetchDashboardMetricNames(ctx context.Context, namespace string, labelsFilters map[string]string) []string {
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 	promClient := in.promClient
 
 	// Get the list of metrics that we look for to determine which dashboards can be used.

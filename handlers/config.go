@@ -19,6 +19,7 @@ import (
 	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/prometheus"
+	utilcontext "github.com/kiali/kiali/util/context"
 )
 
 const (
@@ -326,7 +327,12 @@ func DisabledFeaturesHandler(conf *config.Config, client prometheus.ClientInterf
 			return
 		}
 
-		existingMetrics, err := client.GetExistingMetricNames(r.Context(), requiredMetrics)
+		// Inject the Kiali deployment namespace as the tenancy namespace so that
+		// the Thanos tenancy port (9092) receives the required namespace= parameter.
+		// The Istio control-plane metrics we check here are scraped from the
+		// Kiali deployment namespace, making it the correct tenancy scope.
+		ctx := utilcontext.SetTenancyNamespace(r.Context(), conf.Deployment.Namespace)
+		existingMetrics, err := client.GetExistingMetricNames(ctx, requiredMetrics)
 		if !checkErr(err, "", logger) {
 			log.Error(err)
 			RespondWithJSONIndent(w, http.StatusOK, disabledFeatures)

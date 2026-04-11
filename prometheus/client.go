@@ -21,6 +21,7 @@ import (
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/observability"
+	utilcontext "github.com/kiali/kiali/util/context"
 	"github.com/kiali/kiali/util/httputil"
 )
 
@@ -375,8 +376,17 @@ func NewClientFromPrometheusConfig(conf config.Config, promCfg config.Prometheus
 		return nil, err
 	}
 
+	// Auto-detect query params for the OpenShift Thanos Querier tenancy port.
+	// Port 9092 requires a namespace= query parameter on every request and only
+	// accepts GET (not POST). The queryParamsRoundTripper handles both concerns.
+	var queryParams map[string]string
+	if IsThanosTenancyURL(promCfg.URL) {
+		queryParams = map[string]string{"namespace": namespacePlaceholder}
+	}
+	transport := newQueryParamsRoundTripper(transportConfig, queryParams)
+
 	// Add context headers RoundTripper to the chain for X-Request-Id propagation
-	clientConfig.RoundTripper = newContextHeadersRoundTripper(transportConfig)
+	clientConfig.RoundTripper = newContextHeadersRoundTripper(transport)
 
 	p8s, err := api.NewClient(clientConfig)
 	if err != nil {
@@ -413,6 +423,7 @@ func (in *Client) GetAllRequestRates(ctx context.Context, namespace, cluster str
 		observability.Attribute("ratesInterval", ratesInterval),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	if in.conf.RunMode == config.RunModeOffline {
 		return model.Vector{}, nil
@@ -453,6 +464,7 @@ func (in *Client) GetNamespaceServicesRequestRates(ctx context.Context, namespac
 		observability.Attribute("ratesInterval", ratesInterval),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	if in.conf.RunMode == config.RunModeOffline {
 		return model.Vector{}, nil
@@ -490,6 +502,7 @@ func (in *Client) GetServiceRequestRates(ctx context.Context, namespace, cluster
 		observability.Attribute("ratesInterval", ratesInterval),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	if in.conf.RunMode == config.RunModeOffline {
 		return model.Vector{}, nil
@@ -527,6 +540,7 @@ func (in *Client) GetAppRequestRates(ctx context.Context, namespace, cluster, ap
 		observability.Attribute("ratesInterval", ratesInterval),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	if in.conf.RunMode == config.RunModeOffline {
 		return model.Vector{}, model.Vector{}, nil
@@ -564,6 +578,7 @@ func (in *Client) GetWorkloadRequestRates(ctx context.Context, namespace, cluste
 		observability.Attribute("ratesInterval", ratesInterval),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	if in.conf.RunMode == config.RunModeOffline {
 		return model.Vector{}, model.Vector{}, nil

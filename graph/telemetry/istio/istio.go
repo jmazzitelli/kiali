@@ -41,6 +41,7 @@ import (
 	"github.com/kiali/kiali/log"
 	"github.com/kiali/kiali/observability"
 	"github.com/kiali/kiali/prometheus/internalmetrics"
+	utilcontext "github.com/kiali/kiali/util/context"
 )
 
 const (
@@ -73,19 +74,20 @@ func BuildNamespacesTrafficMap(ctx context.Context, o graph.TelemetryOptions, gl
 
 	for _, namespaceInfo := range o.Namespaces {
 		zl.Trace().Msgf("Build traffic map for namespace [%v]", namespaceInfo)
-		namespaceTrafficMap := buildNamespaceTrafficMap(ctx, namespaceInfo, o, globalInfo)
+		nsCtx := utilcontext.SetTenancyNamespace(ctx, namespaceInfo.Name)
+		namespaceTrafficMap := buildNamespaceTrafficMap(nsCtx, namespaceInfo, o, globalInfo)
 
 		// The appenders can add/remove/alter nodes for the namespace
 		appenderNamespaceInfo := appender.NewAppenderNamespaceInfo(namespaceInfo.Name)
 		for _, a := range appenders {
 			var appenderEnd observability.EndFunc
-			ctx, appenderEnd = observability.StartSpan(
-				ctx,
+			nsCtx, appenderEnd = observability.StartSpan(
+				nsCtx,
 				"Appender "+a.Name(),
 				observability.Attribute("package", "istio"),
 				observability.Attribute("namespace", namespaceInfo.Name),
 			)
-			appenderCtx := buildAppenderContext(ctx, a.Name())
+			appenderCtx := buildAppenderContext(nsCtx, a.Name())
 			appenderTimer := internalmetrics.GetGraphAppenderTimePrometheusTimer(a.Name())
 			a.AppendGraph(appenderCtx, namespaceTrafficMap, globalInfo, appenderNamespaceInfo)
 			internalmetrics.ObserveDurationAndLogResults(
@@ -126,6 +128,7 @@ func buildNamespaceTrafficMap(ctx context.Context, namespaceInfo graph.Namespace
 		observability.Attribute("namespace", namespace),
 	)
 	defer end()
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	// create map to aggregate traffic by protocol and response code
 	trafficMap := graph.NewTrafficMap()
@@ -569,6 +572,11 @@ func BuildNodeTrafficMap(ctx context.Context, o graph.TelemetryOptions, globalIn
 	}
 
 	zl.Trace().Msgf("Build graph for node [%+v]", n)
+
+	// Inject the tenancy namespace so every Prometheus query issued by buildNodeTrafficMap
+	// and by all appenders/finalizers receives the required namespace= URL parameter when
+	// talking to the Thanos tenancy port (9092).
+	ctx = utilcontext.SetTenancyNamespace(ctx, namespace)
 
 	appenders, finalizers := appender.ParseAppenders(o)
 

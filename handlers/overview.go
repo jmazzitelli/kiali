@@ -24,6 +24,7 @@ import (
 	"github.com/kiali/kiali/prometheus"
 	"github.com/kiali/kiali/prometheus/internalmetrics"
 	"github.com/kiali/kiali/tracing"
+	utilcontext "github.com/kiali/kiali/util/context"
 )
 
 // overviewServiceMetricsLimit is the default limit for top-N service latencies and service error rates. It
@@ -106,56 +107,111 @@ func OverviewServiceLatencies(
 			failedClusterQueries := 0
 			var lastQueryErr error
 
+			// When targeting the Thanos tenancy port (9092) each request must carry
+			// exactly one namespace= URL parameter, so we must iterate per-namespace.
+			// For all other Prometheus configurations the original per-cluster approach
+			// (with a namespace regex) is more efficient: one query per cluster.
+			thanosTenancy := prometheus.IsThanosTenancyURL(conf.ExternalServices.Prometheus.URL)
+
 			userClusters := layer.Namespace.GetClusterList()
 
 			for _, cluster := range userClusters {
-				labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q`, cluster)
-				if scopedByConfig || !hasAllClusterNamespaceAccess(ctx, layer, cluster) {
+				if thanosTenancy {
+					// Thanos tenancy port: one query per namespace with exact namespace= label.
 					namespaces, err := layer.Namespace.GetClusterNamespaces(ctx, cluster)
 					if err != nil {
 						zl.Debug().Err(err).Str("cluster", cluster).Msg("OverviewServiceLatencies: could not get namespaces for cluster")
 						continue
 					}
-					nsRegex := buildNamespaceRegex(namespaces)
-					if nsRegex == "" {
+					if len(namespaces) == 0 {
 						continue
 					}
 
-					labels = fmt.Sprintf(`%s,destination_service_namespace=~%q`, labels, nsRegex)
-				}
+					for _, ns := range namespaces {
+						labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q,destination_service_namespace=%q`, cluster, ns.Name)
 
-				query := buildLatencyQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
-				zl.Trace().Str("cluster", cluster).Msgf("OverviewServiceLatencies query: %s", query)
+						query := buildLatencyQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
+						zl.Trace().Str("cluster", cluster).Str("namespace", ns.Name).Msgf("OverviewServiceLatencies query: %s", query)
 
-				result, warnings, err := prom.API().Query(ctx, query, queryTime)
-				if len(warnings) > 0 {
-					zl.Warn().Str("cluster", cluster).Msgf("OverviewServiceLatencies. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
-				}
-				if err != nil {
-					failedClusterQueries++
-					lastQueryErr = err
-					zl.Warn().Err(err).Str("cluster", cluster).Msg("OverviewServiceLatencies: Prometheus query failed for cluster")
-					continue
-				}
+						nsCtx := utilcontext.SetTenancyNamespace(ctx, ns.Name)
+						result, warnings, err := prom.API().Query(nsCtx, query, queryTime)
+						if len(warnings) > 0 {
+							zl.Warn().Str("cluster", cluster).Str("namespace", ns.Name).Msgf("OverviewServiceLatencies. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
+						}
+						if err != nil {
+							failedClusterQueries++
+							lastQueryErr = err
+							zl.Warn().Err(err).Str("cluster", cluster).Str("namespace", ns.Name).Msg("OverviewServiceLatencies: Prometheus query failed for cluster")
+							continue
+						}
 
-				vector, ok := result.(model.Vector)
-				if !ok {
-					failedClusterQueries++
-					lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
-					zl.Warn().Str("cluster", cluster).Msg("OverviewServiceLatencies: unexpected Prometheus result type for cluster")
-					continue
-				}
+						vector, ok := result.(model.Vector)
+						if !ok {
+							failedClusterQueries++
+							lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
+							zl.Warn().Str("cluster", cluster).Str("namespace", ns.Name).Msg("OverviewServiceLatencies: unexpected Prometheus result type for cluster")
+							continue
+						}
 
-				clusterServices := convertToServiceLatencies(vector)
-				for i := range clusterServices {
-					// Some telemetry setups may omit destination_cluster. If we scoped the query to a cluster, default it.
-					if clusterServices[i].Cluster == "" {
-						clusterServices[i].Cluster = cluster
+						clusterServices := convertToServiceLatencies(vector)
+						for i := range clusterServices {
+							if clusterServices[i].Cluster == "" {
+								clusterServices[i].Cluster = cluster
+							}
+						}
+
+						services = append(services, clusterServices...)
+						successfulClusterQueries++
 					}
-				}
+				} else {
+					// Standard Prometheus or Thanos web port (9091): one query per cluster,
+					// optionally filtered with a namespace regex when access is scoped.
+					labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q`, cluster)
+					if scopedByConfig || !hasAllClusterNamespaceAccess(ctx, layer, cluster) {
+						namespaces, err := layer.Namespace.GetClusterNamespaces(ctx, cluster)
+						if err != nil {
+							zl.Debug().Err(err).Str("cluster", cluster).Msg("OverviewServiceLatencies: could not get namespaces for cluster")
+							continue
+						}
+						nsRegex := buildNamespaceRegex(namespaces)
+						if nsRegex == "" {
+							continue
+						}
+						labels = fmt.Sprintf(`%s,destination_service_namespace=~%q`, labels, nsRegex)
+					}
 
-				services = append(services, clusterServices...)
-				successfulClusterQueries++
+					query := buildLatencyQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
+					zl.Trace().Str("cluster", cluster).Msgf("OverviewServiceLatencies query: %s", query)
+
+					result, warnings, err := prom.API().Query(ctx, query, queryTime)
+					if len(warnings) > 0 {
+						zl.Warn().Str("cluster", cluster).Msgf("OverviewServiceLatencies. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
+					}
+					if err != nil {
+						failedClusterQueries++
+						lastQueryErr = err
+						zl.Warn().Err(err).Str("cluster", cluster).Msg("OverviewServiceLatencies: Prometheus query failed for cluster")
+						continue
+					}
+
+					vector, ok := result.(model.Vector)
+					if !ok {
+						failedClusterQueries++
+						lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
+						zl.Warn().Str("cluster", cluster).Msg("OverviewServiceLatencies: unexpected Prometheus result type for cluster")
+						continue
+					}
+
+					clusterServices := convertToServiceLatencies(vector)
+					for i := range clusterServices {
+						if clusterServices[i].Cluster == "" {
+							clusterServices[i].Cluster = cluster
+						}
+					}
+
+					services = append(services, clusterServices...)
+					successfulClusterQueries++
+				}
 			}
 
 			// If Prometheus queries failed for all clusters, surface an error (so UI shows error state).
@@ -394,57 +450,107 @@ func OverviewServiceThroughput(
 			failedClusterQueries := 0
 			var lastQueryErr error
 
+			thanosTenancy := prometheus.IsThanosTenancyURL(conf.ExternalServices.Prometheus.URL)
+
 			userClusters := layer.Namespace.GetClusterList()
 
 			for _, cluster := range userClusters {
-				labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q`, cluster)
-				if scopedByConfig || !hasAllClusterNamespaceAccess(ctx, layer, cluster) {
+				if thanosTenancy {
+					// Thanos tenancy port: one query per namespace with exact namespace= label.
 					namespaces, err := layer.Namespace.GetClusterNamespaces(ctx, cluster)
 					if err != nil {
 						zl.Debug().Err(err).Str("cluster", cluster).Msg("OverviewServiceThroughput: could not get namespaces for cluster")
 						continue
 					}
-					nsRegex := buildNamespaceRegex(namespaces)
-					if nsRegex == "" {
+					if len(namespaces) == 0 {
 						continue
 					}
 
-					labels = fmt.Sprintf(`%s,destination_service_namespace=~%q`, labels, nsRegex)
-				}
+					for _, ns := range namespaces {
+						labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q,destination_service_namespace=%q`, cluster, ns.Name)
 
-				query := buildServiceTcpThroughputQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
-				zl.Trace().Str("cluster", cluster).Msgf("OverviewServiceThroughput query (tcp): %s", query)
+						query := buildServiceTcpThroughputQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
+						zl.Trace().Str("cluster", cluster).Str("namespace", ns.Name).Msgf("OverviewServiceThroughput query (tcp): %s", query)
 
-				result, warnings, err := prom.API().Query(ctx, query, queryTime)
-				if len(warnings) > 0 {
-					zl.Warn().Str("cluster", cluster).Msgf("OverviewServiceThroughput. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
-				}
-				if err != nil {
-					failedClusterQueries++
-					lastQueryErr = err
-					zl.Warn().Err(err).Str("cluster", cluster).Msg("OverviewServiceThroughput: Prometheus query failed for cluster")
-					continue
-				}
+						nsCtx := utilcontext.SetTenancyNamespace(ctx, ns.Name)
+						result, warnings, err := prom.API().Query(nsCtx, query, queryTime)
+						if len(warnings) > 0 {
+							zl.Warn().Str("cluster", cluster).Str("namespace", ns.Name).Msgf("OverviewServiceThroughput. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
+						}
+						if err != nil {
+							failedClusterQueries++
+							lastQueryErr = err
+							zl.Warn().Err(err).Str("cluster", cluster).Str("namespace", ns.Name).Msg("OverviewServiceThroughput: Prometheus query failed for cluster")
+							continue
+						}
 
-				vector, ok := result.(model.Vector)
-				if !ok {
-					failedClusterQueries++
-					lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
-					zl.Warn().Str("cluster", cluster).Msg("OverviewServiceThroughput: unexpected Prometheus result type for cluster")
-					continue
-				}
+						vector, ok := result.(model.Vector)
+						if !ok {
+							failedClusterQueries++
+							lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
+							zl.Warn().Str("cluster", cluster).Str("namespace", ns.Name).Msg("OverviewServiceThroughput: unexpected Prometheus result type for cluster")
+							continue
+						}
 
-				clusterServices := convertToServiceTcpThroughput(vector)
+						clusterServices := convertToServiceTcpThroughput(vector)
+						for i := range clusterServices {
+							if clusterServices[i].Cluster == "" {
+								clusterServices[i].Cluster = cluster
+							}
+						}
 
-				for i := range clusterServices {
-					// Some telemetry setups may omit destination_cluster. If we scoped the query to a cluster, default it.
-					if clusterServices[i].Cluster == "" {
-						clusterServices[i].Cluster = cluster
+						services = append(services, clusterServices...)
+						successfulClusterQueries++
 					}
-				}
+				} else {
+					// Standard Prometheus or Thanos web port (9091): one query per cluster,
+					// optionally filtered with a namespace regex when access is scoped.
+					labels := fmt.Sprintf(`destination_workload!="unknown",destination_cluster=%q`, cluster)
+					if scopedByConfig || !hasAllClusterNamespaceAccess(ctx, layer, cluster) {
+						namespaces, err := layer.Namespace.GetClusterNamespaces(ctx, cluster)
+						if err != nil {
+							zl.Debug().Err(err).Str("cluster", cluster).Msg("OverviewServiceThroughput: could not get namespaces for cluster")
+							continue
+						}
+						nsRegex := buildNamespaceRegex(namespaces)
+						if nsRegex == "" {
+							continue
+						}
+						labels = fmt.Sprintf(`%s,destination_service_namespace=~%q`, labels, nsRegex)
+					}
 
-				services = append(services, clusterServices...)
-				successfulClusterQueries++
+					query := buildServiceTcpThroughputQuery(conf, labels, groupBy, rateInterval, overviewServiceMetricsLimit)
+					zl.Trace().Str("cluster", cluster).Msgf("OverviewServiceThroughput query (tcp): %s", query)
+
+					result, warnings, err := prom.API().Query(ctx, query, queryTime)
+					if len(warnings) > 0 {
+						zl.Warn().Str("cluster", cluster).Msgf("OverviewServiceThroughput. Prometheus Warnings: [%s]", strings.Join(warnings, ","))
+					}
+					if err != nil {
+						failedClusterQueries++
+						lastQueryErr = err
+						zl.Warn().Err(err).Str("cluster", cluster).Msg("OverviewServiceThroughput: Prometheus query failed for cluster")
+						continue
+					}
+
+					vector, ok := result.(model.Vector)
+					if !ok {
+						failedClusterQueries++
+						lastQueryErr = fmt.Errorf("unexpected Prometheus result type: %T", result)
+						zl.Warn().Str("cluster", cluster).Msg("OverviewServiceThroughput: unexpected Prometheus result type for cluster")
+						continue
+					}
+
+					clusterServices := convertToServiceTcpThroughput(vector)
+					for i := range clusterServices {
+						if clusterServices[i].Cluster == "" {
+							clusterServices[i].Cluster = cluster
+						}
+					}
+
+					services = append(services, clusterServices...)
+					successfulClusterQueries++
+				}
 			}
 
 			// If Prometheus queries failed for all clusters, surface an error (so UI shows error state).

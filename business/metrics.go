@@ -11,6 +11,7 @@ import (
 	"github.com/kiali/kiali/config"
 	"github.com/kiali/kiali/models"
 	"github.com/kiali/kiali/prometheus"
+	utilcontext "github.com/kiali/kiali/util/context"
 )
 
 // MetricsService deals with fetching metrics from prometheus
@@ -70,6 +71,7 @@ func createMetricsLabelsBuilder(q *models.IstioMetricsQuery, conf *config.Config
 }
 
 func (in *MetricsService) fetchAllMetrics(ctx context.Context, q models.IstioMetricsQuery, lb *MetricsLabelsBuilder, grouping string, scaler func(n string) float64) (models.MetricsMap, error) {
+	ctx = utilcontext.SetTenancyNamespace(ctx, q.Namespace)
 	labels := lb.Build()
 	labelsError := lb.BuildForErrors()
 
@@ -206,6 +208,7 @@ func (in *MetricsService) GetStats(ctx context.Context, queries []models.Metrics
 }
 
 func (in *MetricsService) getSingleQueryStats(ctx context.Context, q *models.MetricsStatsQuery) (*models.MetricsStats, error) {
+	ctx = utilcontext.SetTenancyNamespace(ctx, q.Target.Namespace)
 	lb := createStatsMetricsLabelsBuilder(q, in.conf)
 	labels := lb.Build()
 	stats, err := in.prom.FetchHistogramValues(ctx, "istio_request_duration_milliseconds", labels, "", q.Interval, q.Avg, q.Quantiles, q.QueryTime)
@@ -258,6 +261,7 @@ func createStatsMetricsLabelsBuilder(q *models.MetricsStatsQuery, conf *config.C
 }
 
 func (in *MetricsService) GetControlPlaneMetrics(ctx context.Context, q models.IstioMetricsQuery, pods models.Pods, scaler func(n string) float64) (models.MetricsMap, error) {
+	ctx = utilcontext.SetTenancyNamespace(ctx, q.Namespace)
 	podRegex := ""
 	separator := ""
 	podLabel := ""
@@ -337,6 +341,7 @@ func (in *MetricsService) GetControlPlaneMetrics(ctx context.Context, q models.I
 }
 
 func (in *MetricsService) GetZtunnelMetrics(ctx context.Context, q models.IstioMetricsQuery) (models.MetricsMap, error) {
+	ctx = utilcontext.SetTenancyNamespace(ctx, q.Namespace)
 	metrics := make(models.MetricsMap)
 	var err error
 	var converted []models.Metric
@@ -406,6 +411,7 @@ func (in *MetricsService) GetZtunnelMetrics(ctx context.Context, q models.IstioM
 }
 
 func (in *MetricsService) GetResourceMetrics(ctx context.Context, q models.IstioMetricsQuery) (models.MetricsMap, error) {
+	ctx = utilcontext.SetTenancyNamespace(ctx, q.Namespace)
 	metrics := make(models.MetricsMap)
 	var err error
 	var converted []models.Metric
