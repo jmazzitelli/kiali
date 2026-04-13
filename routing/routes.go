@@ -44,6 +44,7 @@ func NewRoutes(
 	clientFactory kubernetes.ClientFactory,
 	cpm business.ControlPlaneMonitor,
 	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	traceClientLoader func() tracing.ClientInterface,
 	authController authentication.AuthController,
 	grafana *grafana.Service,
@@ -1130,7 +1131,7 @@ func NewRoutes(
 			log.MetricsLogName,
 			"GET",
 			"/api/namespaces/{namespace}/customdashboard/{dashboard}",
-			handlers.CustomDashboard(conf, kialiCache, clientFactory, discovery, grafana, prom, traceClientLoader, cpm),
+			handlers.CustomDashboard(conf, kialiCache, clientFactory, discovery, grafana, customDashboardsProm, traceClientLoader, cpm),
 			true,
 		},
 		// swagger:route GET /namespaces/{namespace}/metrics namespaces namespaceMetrics

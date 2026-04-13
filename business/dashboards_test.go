@@ -332,3 +332,131 @@ func fakeMetrics() models.MetricsMap {
 		"tcp_closed":              fakeCounter(32),
 	}
 }
+
+// TestGetDashboardUsesCustomDashboardsPromClient verifies that when a
+// dedicated custom-dashboards Prometheus client is injected into
+// NewDashboardsService, metric queries go through that client rather than
+// the main one.
+func TestGetDashboardUsesCustomDashboardsPromClient(t *testing.T) {
+	assert := assert.New(t)
+
+	conf := config.NewConfig()
+	conf.ExternalServices.CustomDashboards.Enabled = true
+	conf.ExternalServices.Prometheus.URL = "http://prometheus-main:9090"
+	conf.ExternalServices.CustomDashboards.Prometheus.URL = "http://prometheus-custom:9090"
+
+	conf.CustomDashboards = append(conf.CustomDashboards, *fakeDashboard("1"))
+
+	mainProm := new(pmock.PromClientMock)
+	customProm := new(pmock.PromClientMock)
+
+	ns := models.Namespace{Name: "my-namespace"}
+	grafanaSvc := grafana.NewService(conf, kubetest.NewFakeK8sClient())
+
+	// Pass customProm directly — the caller is responsible for providing the
+	// right client, and DashboardsService uses it as-is.
+	service := NewDashboardsService(conf, grafanaSvc, customProm, &ns, nil)
+
+	expectedLabels := `{namespace="my-namespace",APP="my-app"}`
+	query := models.DashboardQuery{
+		Namespace: "my-namespace",
+		LabelsFilters: map[string]string{
+			"APP": "my-app",
+		},
+	}
+	query.FillDefaults()
+
+	customProm.MockMetric(context.Background(), "my_metric_1_1", expectedLabels, &query.RangeQuery, 10)
+	customProm.MockHistogram(context.Background(), "my_metric_1_2", expectedLabels, &query.RangeQuery, 11, 12)
+
+	dashboard, err := service.GetDashboard(context.Background(), query, "dashboard1")
+
+	assert.Nil(err)
+	assert.Equal("Dashboard 1", dashboard.Title)
+	assert.Len(dashboard.Charts, 2)
+
+	// The custom prom client should have been called for metric fetching.
+	customProm.AssertNumberOfCalls(t, "FetchRateRange", 1)
+	customProm.AssertNumberOfCalls(t, "FetchHistogramRange", 1)
+
+	// The main prom client should NOT have been called at all.
+	mainProm.AssertNumberOfCalls(t, "FetchRateRange", 0)
+	mainProm.AssertNumberOfCalls(t, "FetchHistogramRange", 0)
+}
+
+// TestNewLayerUsesDefaultCustomDashboardsProm verifies that when
+// SetCustomDashboardsPromClient has been called, a Layer created with nil
+// for customDashboardsProm (the per-request path via NewLayer/getLayer)
+// gives its AppService and WorkloadService the stored custom client rather
+// than falling back to the main prom.
+func TestNewLayerUsesDefaultCustomDashboardsProm(t *testing.T) {
+	mainProm := new(pmock.PromClientMock)
+	customProm := new(pmock.PromClientMock)
+
+	// Restore the package-level default after this test.
+	origDefault := defaultCustomDashboardsProm
+	t.Cleanup(func() { defaultCustomDashboardsProm = origDefault })
+
+	conf := config.NewConfig()
+
+	// Simulate startup: store the custom dashboards client.
+	SetCustomDashboardsPromClient(customProm)
+
+	// Create a Layer with nil customDashboardsProm, which is what NewLayer
+	// (called from getLayer in per-request handlers) does.
+	layer := newLayer(nil, nil, mainProm, nil, nil, nil, conf, nil, nil, nil)
+
+	if layer.App.customDashboardsProm != customProm {
+		t.Errorf("AppService.customDashboardsProm = main prom; want custom prom set via SetCustomDashboardsPromClient")
+	}
+	if layer.Workload.customDashboardsProm != customProm {
+		t.Errorf("WorkloadService.customDashboardsProm = main prom; want custom prom set via SetCustomDashboardsPromClient")
+	}
+}
+
+// TestNewLayerFallsBackToMainProm verifies that when
+// SetCustomDashboardsPromClient has NOT been called, a Layer created with
+// nil for customDashboardsProm falls back to the main prom client.
+func TestNewLayerFallsBackToMainProm(t *testing.T) {
+	mainProm := new(pmock.PromClientMock)
+
+	origDefault := defaultCustomDashboardsProm
+	t.Cleanup(func() { defaultCustomDashboardsProm = origDefault })
+
+	// Clear any stored default to simulate no custom URL configured.
+	SetCustomDashboardsPromClient(nil)
+
+	conf := config.NewConfig()
+	layer := newLayer(nil, nil, mainProm, nil, nil, nil, conf, nil, nil, nil)
+
+	if layer.App.customDashboardsProm != mainProm {
+		t.Errorf("AppService.customDashboardsProm != main prom; expected fallback to main prom when no default is set")
+	}
+	if layer.Workload.customDashboardsProm != mainProm {
+		t.Errorf("WorkloadService.customDashboardsProm != main prom; expected fallback to main prom when no default is set")
+	}
+}
+
+// TestNewLayerExplicitCustomDashboardsPromTakesPriority verifies that an
+// explicitly passed customDashboardsProm takes priority over both the
+// stored default and the main prom.
+func TestNewLayerExplicitCustomDashboardsPromTakesPriority(t *testing.T) {
+	mainProm := new(pmock.PromClientMock)
+	storedProm := new(pmock.PromClientMock)
+	explicitProm := new(pmock.PromClientMock)
+
+	origDefault := defaultCustomDashboardsProm
+	t.Cleanup(func() { defaultCustomDashboardsProm = origDefault })
+
+	SetCustomDashboardsPromClient(storedProm)
+
+	conf := config.NewConfig()
+	layer := newLayer(nil, nil, mainProm, explicitProm, nil, nil, conf, nil, nil, nil)
+
+	if layer.App.customDashboardsProm != explicitProm {
+		t.Errorf("AppService.customDashboardsProm != explicitProm; explicit arg should take priority over stored default")
+	}
+	if layer.Workload.customDashboardsProm != explicitProm {
+		t.Errorf("WorkloadService.customDashboardsProm != explicitProm; explicit arg should take priority over stored default")
+	}
+}

@@ -12,6 +12,20 @@ import (
 	"github.com/kiali/kiali/tracing"
 )
 
+// defaultCustomDashboardsProm is set once at startup via
+// SetCustomDashboardsPromClient. When newLayer receives nil for its
+// customDashboardsProm parameter it falls back to this value, ensuring
+// per-request Layers (created through NewLayer / getLayer) also use the
+// correct client without requiring every caller to thread it explicitly.
+var defaultCustomDashboardsProm prometheus.ClientInterface
+
+// SetCustomDashboardsPromClient stores the custom-dashboards Prometheus
+// client for use by Layers that don't receive one explicitly. Call this
+// once at startup after creating the client.
+func SetCustomDashboardsPromClient(c prometheus.ClientInterface) {
+	defaultCustomDashboardsProm = c
+}
+
 // Layer is a container for fast access to inner services.
 // A business layer is created per token/user. Any data that
 // needs to be saved across layers is saved in the Kiali Cache.
@@ -35,6 +49,7 @@ func newLayer(
 	userClients map[string]kubernetes.UserClientInterface,
 	kialiSAClients map[string]kubernetes.ClientInterface,
 	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	traceClient tracing.ClientInterface,
 	cache cache.KialiCache,
 	conf *config.Config,
@@ -42,12 +57,20 @@ func newLayer(
 	discovery istio.MeshDiscovery,
 	cpm ControlPlaneMonitor,
 ) *Layer {
+	if customDashboardsProm == nil {
+		if defaultCustomDashboardsProm != nil {
+			customDashboardsProm = defaultCustomDashboardsProm
+		} else {
+			customDashboardsProm = prom
+		}
+	}
+
 	temporaryLayer := &Layer{}
 
 	homeClusterName := conf.KubernetesConfig.ClusterName
 
 	// TODO: Modify the k8s argument to other services to pass the whole k8s map if needed
-	temporaryLayer.App = NewAppService(temporaryLayer, conf, cache, prom, grafana, userClients)
+	temporaryLayer.App = NewAppService(temporaryLayer, conf, cache, prom, customDashboardsProm, grafana, userClients)
 	temporaryLayer.Health = NewHealthService(temporaryLayer, conf, cache, prom, userClients)
 	temporaryLayer.IstioConfig = IstioConfigService{conf: conf, userClients: userClients, saClients: kialiSAClients, kialiCache: cache, businessLayer: temporaryLayer, controlPlaneMonitor: cpm}
 	temporaryLayer.IstioStatus = NewIstioStatusService(cache, conf, discovery, kialiSAClients[homeClusterName], &temporaryLayer.Tracing, userClients, &temporaryLayer.Workload, &temporaryLayer.Health)
@@ -59,7 +82,7 @@ func newLayer(
 	temporaryLayer.Svc = SvcService{conf: conf, kialiCache: cache, businessLayer: temporaryLayer, prom: prom, userClients: userClients}
 	temporaryLayer.TLS = TLSService{conf: conf, discovery: discovery, userClients: userClients, kialiCache: cache, businessLayer: temporaryLayer}
 	temporaryLayer.Validations = NewValidationsService(conf, &temporaryLayer.IstioConfig, cache, &temporaryLayer.Mesh, &temporaryLayer.Namespace, &temporaryLayer.Svc, userClients, &temporaryLayer.Workload)
-	temporaryLayer.Workload = *NewWorkloadService(cache, conf, grafana, kialiSAClients, temporaryLayer, prom, userClients)
+	temporaryLayer.Workload = *NewWorkloadService(cache, conf, grafana, kialiSAClients, temporaryLayer, prom, customDashboardsProm, userClients)
 	temporaryLayer.Tracing = NewTracingService(conf, traceClient, &temporaryLayer.Svc, &temporaryLayer.Workload, &temporaryLayer.App)
 	return temporaryLayer
 }
@@ -84,7 +107,7 @@ func NewLayer(
 	}
 
 	kialiSAClients := cf.GetSAClients()
-	return newLayer(userClients, kialiSAClients, prom, traceClient, cache, conf, grafana, discovery, cpm), nil
+	return newLayer(userClients, kialiSAClients, prom, nil, traceClient, cache, conf, grafana, discovery, cpm), nil
 }
 
 // NewLayer creates the business layer using the passed k8sClients and prom clients.
@@ -96,11 +119,12 @@ func NewLayerWithSAClients(
 	conf *config.Config,
 	cache cache.KialiCache,
 	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	traceClient tracing.ClientInterface,
 	cpm ControlPlaneMonitor,
 	grafana *grafana.Service,
 	discovery *istio.Discovery,
 	saClients map[string]kubernetes.UserClientInterface, // note this is typed as UserClientInterface!
 ) (*Layer, error) {
-	return newLayer(saClients, kubernetes.ConvertFromUserClients(saClients), prom, traceClient, cache, conf, grafana, discovery, cpm), nil
+	return newLayer(saClients, kubernetes.ConvertFromUserClients(saClients), prom, customDashboardsProm, traceClient, cache, conf, grafana, discovery, cpm), nil
 }

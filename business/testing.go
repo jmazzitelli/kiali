@@ -109,5 +109,5 @@ func (lb *layerBuilder) Build() *Layer {
 	if lb.grafana == nil {
 		lb.grafana = grafana.NewService(lb.conf, lb.userClients[lb.conf.KubernetesConfig.ClusterName])
 	}
-	return newLayer(lb.userClients, lb.kialiSAClients, lb.prom, lb.tracingLoader(), lb.cache, lb.conf, lb.grafana, lb.discovery, lb.cpm)
+	return newLayer(lb.userClients, lb.kialiSAClients, lb.prom, nil, lb.tracingLoader(), lb.cache, lb.conf, lb.grafana, lb.discovery, lb.cpm)
 }

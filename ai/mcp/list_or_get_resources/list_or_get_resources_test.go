@@ -45,7 +45,7 @@ func setupMocks(t *testing.T) *mcputil.KialiInterface {
 	cpm := &business.FakeControlPlaneMonitor{}
 	authInfo := map[string]*api.AuthInfo{conf.KubernetesConfig.ClusterName: {Token: "test"}}
 	userClients, _ := cf.GetClients(authInfo)
-	businessLayer, _ := business.NewLayerWithSAClients(conf, kialiCache, prom, nil, cpm, grafanaSvc, discovery, userClients)
+	businessLayer, _ := business.NewLayerWithSAClients(conf, kialiCache, prom, nil, nil, cpm, grafanaSvc, discovery, userClients)
 
 	return &mcputil.KialiInterface{
 		Request:       req,

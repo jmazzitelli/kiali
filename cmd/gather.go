@@ -181,9 +181,10 @@ func newGatherCmd(conf *config.Config) *cobra.Command {
 				conf,
 				cache,
 				prom,
-				nil, // tracing.ClientInterface
-				nil, // business.ControlPlaneMonitor
-				nil, // *grafana.Service
+				prom, // customDashboardsProm — reuse main prom for gather
+				nil,  // tracing.ClientInterface
+				nil,  // business.ControlPlaneMonitor
+				nil,  // *grafana.Service
 				discovery,
 				cf.GetSAClientsAsUserClientInterfaces())
 			if err != nil {

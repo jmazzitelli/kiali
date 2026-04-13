@@ -50,7 +50,7 @@ var _ = Describe("Validations controller", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			discovery := istio.NewDiscovery(kubernetes.ConvertFromUserClients(saClients), kialiCache, conf)
-			layer, err := business.NewLayerWithSAClients(conf, kialiCache, nil, nil, nil, nil, discovery, saClients)
+			layer, err := business.NewLayerWithSAClients(conf, kialiCache, nil, nil, nil, nil, nil, discovery, saClients)
 			Expect(err).ToNot(HaveOccurred())
 
 			conf.ExternalServices.Istio.ValidationReconcileInterval = util.AsPtr(time.Millisecond * 100)

@@ -42,6 +42,7 @@ func NewServer(ctx context.Context,
 	cache cache.KialiCache,
 	conf *config.Config,
 	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	traceClientLoader func() tracing.ClientInterface,
 	discovery *istio.Discovery,
 	staticAssetFS fs.FS,
@@ -49,7 +50,7 @@ func NewServer(ctx context.Context,
 	grafana := grafana.NewService(conf, clientFactory.GetSAHomeClusterClient())
 	perses := perses.NewService(conf, clientFactory.GetSAHomeClusterClient())
 	// create a router that will route all incoming API server requests to different handlers
-	router, err := routing.NewRouter(ctx, conf, cache, clientFactory, prom, traceClientLoader, controlPlaneMonitor, grafana, perses, discovery, staticAssetFS)
+	router, err := routing.NewRouter(ctx, conf, cache, clientFactory, prom, customDashboardsProm, traceClientLoader, controlPlaneMonitor, grafana, perses, discovery, staticAssetFS)
 	if err != nil {
 		return nil, err
 	}

@@ -96,6 +96,19 @@ func run(ctx context.Context, conf *config.Config, staticAssetFS fs.FS, clientFa
 		log.Fatalf("Error creating Prometheus client: %s", err)
 	}
 
+	// When custom dashboards are configured with a separate Prometheus URL,
+	// create a dedicated client for custom dashboard metric queries.
+	// Otherwise, reuse the main client.
+	customDashboardsProm := prometheus.ClientInterface(prom)
+	if conf.ExternalServices.CustomDashboards.Enabled && conf.ExternalServices.CustomDashboards.Prometheus.URL != "" {
+		cdp, err := prometheus.NewClientFromPrometheusConfig(*conf, conf.ExternalServices.CustomDashboards.Prometheus, kialiToken)
+		if err != nil {
+			log.Fatalf("Error creating custom dashboards Prometheus client: %s", err)
+		}
+		customDashboardsProm = cdp
+	}
+	business.SetCustomDashboardsPromClient(customDashboardsProm)
+
 	// Create shared tracing client shared by all tracing requests in the business layer.
 	// Because tracing is not an essential component, we don't want to block startup
 	// of the server if the tracing client fails to initialize. tracing.NewClient will
@@ -124,7 +137,7 @@ func run(ctx context.Context, conf *config.Config, staticAssetFS fs.FS, clientFa
 	// Needs to be started after the server so that the cache is started because the controllers use the cache.
 	// Passing nil here because the tracing client is not used for validations and that is all this layer is used for.
 	// Passing the `tracingClient` above would be a race condition since it gets set in a goroutine.
-	layer, err := business.NewLayerWithSAClients(conf, cache, prom, nil, cpm, grafana, discovery, clientFactory.GetSAClientsAsUserClientInterfaces())
+	layer, err := business.NewLayerWithSAClients(conf, cache, prom, customDashboardsProm, nil, cpm, grafana, discovery, clientFactory.GetSAClientsAsUserClientInterfaces())
 	if err != nil {
 		log.Fatalf("Error creating business layer: %s", err)
 	}
@@ -189,7 +202,7 @@ func run(ctx context.Context, conf *config.Config, staticAssetFS fs.FS, clientFa
 	}
 
 	// Start listening to requests
-	server, err := server.NewServer(ctx, cpm, clientFactory, cache, conf, prom, tracingLoader, discovery, staticAssetFS)
+	server, err := server.NewServer(ctx, cpm, clientFactory, cache, conf, prom, customDashboardsProm, tracingLoader, discovery, staticAssetFS)
 	if err != nil {
 		log.Fatal(err)
 	}

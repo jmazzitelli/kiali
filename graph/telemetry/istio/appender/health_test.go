@@ -503,7 +503,7 @@ func TestErrorCausesPanic(t *testing.T) {
 	prom.MockAllRequestRates(context.Background(), "testNamespace", conf.KubernetesConfig.ClusterName, "0s", time.Unix(0, 0), model.Vector{})
 	k8sclients := make(map[string]kubernetes.UserClientInterface)
 	k8sclients[conf.KubernetesConfig.ClusterName] = k8s
-	businessLayer, err := business.NewLayerWithSAClients(conf, cache, nil, nil, nil, nil, discovery, k8sclients)
+	businessLayer, err := business.NewLayerWithSAClients(conf, cache, nil, nil, nil, nil, nil, discovery, k8sclients)
 	require.NoError(err)
 
 	globalInfo := graph.NewGlobalInfo(businessLayer, nil, config.Get(), []models.KubeCluster{}, NewGlobalIstioInfo())

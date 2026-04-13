@@ -177,8 +177,9 @@ This mode allows you to analyze pre-collected data without requiring a live clus
 				clientFactory,
 				kialiCache,
 				conf,
-				promClient,    // prom
-				tracingLoader, // traceClientLoader
+				promClient, // prom
+				promClient, // customDashboardsProm — reuse main prom for offline mode
+				tracingLoader,
 				discovery,
 				staticAssetFS,
 			)

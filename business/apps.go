@@ -23,25 +23,27 @@ import (
 	"github.com/kiali/kiali/util/sliceutil"
 )
 
-func NewAppService(businessLayer *Layer, conf *config.Config, kialiCache cache.KialiCache, prom prometheus.ClientInterface, grafana *grafana.Service, userClients map[string]kubernetes.UserClientInterface) AppService {
+func NewAppService(businessLayer *Layer, conf *config.Config, kialiCache cache.KialiCache, prom prometheus.ClientInterface, customDashboardsProm prometheus.ClientInterface, grafana *grafana.Service, userClients map[string]kubernetes.UserClientInterface) AppService {
 	return AppService{
-		businessLayer: businessLayer,
-		conf:          conf,
-		grafana:       grafana,
-		kialiCache:    kialiCache,
-		prom:          prom,
-		userClients:   userClients,
+		businessLayer:        businessLayer,
+		conf:                 conf,
+		customDashboardsProm: customDashboardsProm,
+		grafana:              grafana,
+		kialiCache:           kialiCache,
+		prom:                 prom,
+		userClients:          userClients,
 	}
 }
 
 // AppService deals with fetching Workloads group by "app" label, which will be identified as an "application"
 type AppService struct {
-	businessLayer *Layer
-	conf          *config.Config
-	grafana       *grafana.Service
-	kialiCache    cache.KialiCache
-	prom          prometheus.ClientInterface
-	userClients   map[string]kubernetes.UserClientInterface
+	businessLayer        *Layer
+	conf                 *config.Config
+	customDashboardsProm prometheus.ClientInterface
+	grafana              *grafana.Service
+	kialiCache           cache.KialiCache
+	prom                 prometheus.ClientInterface
+	userClients          map[string]kubernetes.UserClientInterface
 }
 
 type AppCriteria struct {
@@ -461,7 +463,7 @@ func (in *AppService) GetAppDetails(ctx context.Context, criteria AppCriteria) (
 		}
 	}
 
-	appInstance.Runtimes = NewDashboardsService(in.conf, in.grafana, in.prom, ns, nil).GetCustomDashboardRefs(ctx, criteria.Namespace, criteria.AppName, "", pods)
+	appInstance.Runtimes = NewDashboardsService(in.conf, in.grafana, in.customDashboardsProm, ns, nil).GetCustomDashboardRefs(ctx, criteria.Namespace, criteria.AppName, "", pods)
 	if criteria.IncludeHealth {
 		appInstance.Health, err = in.businessLayer.Health.GetAppHealth(ctx, criteria.Namespace, criteria.Cluster, criteria.AppName, criteria.RateInterval, criteria.QueryTime, appDetails)
 		if err != nil {

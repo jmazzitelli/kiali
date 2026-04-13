@@ -41,6 +41,7 @@ func NewRouter(
 	kialiCache cache.KialiCache,
 	clientFactory kubernetes.ClientFactory,
 	prom kialiprometheus.ClientInterface,
+	customDashboardsProm kialiprometheus.ClientInterface,
 	traceClientLoader func() tracing.ClientInterface,
 	cpm business.ControlPlaneMonitor,
 	grafana *grafana.Service,
@@ -212,7 +213,7 @@ func NewRouter(
 	}
 
 	// Build our API server routes and install them.
-	apiRoutes := NewRoutes(conf, kialiCache, clientFactory, cpm, prom, traceClientLoader, authController, grafana, perses, discovery, graphCache, refreshJobManager, aiStore)
+	apiRoutes := NewRoutes(conf, kialiCache, clientFactory, cpm, prom, customDashboardsProm, traceClientLoader, authController, grafana, perses, discovery, graphCache, refreshJobManager, aiStore)
 	// Add any auth routes to the app router.
 	apiRoutes.Routes = append(apiRoutes.Routes, authRoutes...)
 

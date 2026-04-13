@@ -50,6 +50,7 @@ func NewWorkloadService(
 	kialiSAclients map[string]kubernetes.ClientInterface,
 	layer *Layer,
 	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	userClients map[string]kubernetes.UserClientInterface,
 ) *WorkloadService {
 	excludedWorkloads := make(map[string]bool)
@@ -58,13 +59,14 @@ func NewWorkloadService(
 	}
 
 	return &WorkloadService{
-		businessLayer:     layer,
-		cache:             cache,
-		conf:              conf,
-		excludedWorkloads: excludedWorkloads,
-		prom:              prom,
-		userClients:       userClients,
-		kialiSAClients:    kialiSAclients,
+		businessLayer:        layer,
+		cache:                cache,
+		conf:                 conf,
+		customDashboardsProm: customDashboardsProm,
+		excludedWorkloads:    excludedWorkloads,
+		prom:                 prom,
+		userClients:          userClients,
+		kialiSAClients:       kialiSAclients,
 	}
 }
 
@@ -75,12 +77,13 @@ type WorkloadService struct {
 	// The global kiali cache. This should be passed into the workload service rather than created inside of it.
 	cache cache.KialiCache
 	// The global kiali conf.
-	conf              *config.Config
-	excludedWorkloads map[string]bool
-	grafana           *grafana.Service
-	prom              prometheus.ClientInterface
-	userClients       map[string]kubernetes.UserClientInterface
-	kialiSAClients    map[string]kubernetes.ClientInterface
+	conf                 *config.Config
+	customDashboardsProm prometheus.ClientInterface
+	excludedWorkloads    map[string]bool
+	grafana              *grafana.Service
+	prom                 prometheus.ClientInterface
+	userClients          map[string]kubernetes.UserClientInterface
+	kialiSAClients       map[string]kubernetes.ClientInterface
 }
 
 type WorkloadCriteria struct {
@@ -582,7 +585,7 @@ func (in *WorkloadService) GetWorkload(ctx context.Context, criteria WorkloadCri
 		verLabelName, _ := conf.GetVersionLabelName(workload.Labels)
 		app := workload.Labels[appLabelName]
 		version := workload.Labels[verLabelName]
-		runtimes = NewDashboardsService(in.conf, in.grafana, in.prom, ns, workload).GetCustomDashboardRefs(ctx, criteria.Namespace, app, version, workload.Pods)
+		runtimes = NewDashboardsService(in.conf, in.grafana, in.customDashboardsProm, ns, workload).GetCustomDashboardRefs(ctx, criteria.Namespace, app, version, workload.Pods)
 	}()
 
 	// WorkloadGroup.Labels can be empty

@@ -26,7 +26,7 @@ func CustomDashboard(
 	clientFactory kubernetes.ClientFactory,
 	discovery istio.MeshDiscovery,
 	grafana *grafana.Service,
-	prom prometheus.ClientInterface,
+	customDashboardsProm prometheus.ClientInterface,
 	traceLoader func() tracing.ClientInterface,
 	cpm business.ControlPlaneMonitor,
 ) http.HandlerFunc {
@@ -37,7 +37,7 @@ func CustomDashboard(
 		namespace := pathParams["namespace"]
 		dashboardName := pathParams["dashboard"]
 
-		layer, err := getLayer(r, conf, cache, clientFactory, cpm, prom, traceLoader, grafana, discovery)
+		layer, err := getLayer(r, conf, cache, clientFactory, cpm, customDashboardsProm, traceLoader, grafana, discovery)
 		if err != nil {
 			RespondWithError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -69,7 +69,7 @@ func CustomDashboard(
 			}
 		}
 
-		svc := business.NewDashboardsService(conf, grafana, prom, info, wkd)
+		svc := business.NewDashboardsService(conf, grafana, customDashboardsProm, info, wkd)
 		if !svc.CustomEnabled {
 			RespondWithError(w, http.StatusServiceUnavailable, "Custom dashboards are disabled in config")
 			return

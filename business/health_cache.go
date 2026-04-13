@@ -203,6 +203,7 @@ func (m *healthMonitor) createHealthLayer() (*Layer, error) {
 		m.conf,
 		m.cache,
 		m.prom,
+		nil, // customDashboardsProm - not needed for health
 		nil, // traceClient - not needed for health
 		&FakeControlPlaneMonitor{},
 		nil, // grafana - not needed for health
