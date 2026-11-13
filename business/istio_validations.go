@@ -13,7 +13,6 @@ import (
 	security_v1 "istio.io/client-go/pkg/apis/security/v1"
 	apps_v1 "k8s.io/api/apps/v1"
 	core_v1 "k8s.io/api/core/v1"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -538,6 +537,31 @@ func (in *validationInfo) forceCheckers() bool {
 	return in.hasBaseChange
 }
 
+// allIstioConfigCriteria includes every config type the validation checkers consume.
+// The background Validate and the on-demand ValidateIstioObject must sweep the same set:
+// a type listed by one and missed by the other would validate on one path only.
+func allIstioConfigCriteria() IstioConfigCriteria {
+	return IstioConfigCriteria{
+		IncludeAuthorizationPolicies:  true,
+		IncludeDestinationRules:       true,
+		IncludeGateways:               true,
+		IncludeK8sGateways:            true,
+		IncludeK8sGRPCRoutes:          true,
+		IncludeK8sHTTPRoutes:          true,
+		IncludeK8sInferencePools:      true,
+		IncludeK8sReferenceGrants:     true,
+		IncludePeerAuthentications:    true,
+		IncludeRequestAuthentications: true,
+		IncludeServiceEntries:         true,
+		IncludeSidecars:               true,
+		IncludeTelemetry:              true,
+		IncludeVirtualServices:        true,
+		IncludeWasmPlugins:            true,
+		IncludeWorkloadEntries:        true,
+		IncludeWorkloadGroups:         true,
+	}
+}
+
 // Validate runs a full validation on all objects. The first return variable is the "validationPerformed" bool, indicating whether or not
 // the validation checkers were run. It will return false if a changeMap is provided in vInfo and no config changes were detected for the
 // cluster. Otherwise, it will return true. When true the new "validations" are returned in the second return variable. When false
@@ -563,46 +587,34 @@ func (in *IstioValidationsService) Validate(ctx context.Context, cluster string,
 	if err != nil {
 		return false, nil, fmt.Errorf("unable to get kube cache for cluster [%s]: %w", cluster, err)
 	}
-	var svcList core_v1.ServiceList
-	if err := kubeCache.List(ctx, &svcList, &client.ListOptions{}); err != nil {
+	// List per readable namespace (see cache.ListInNamespaces): an all-namespace list
+	// stalls on the never-syncing informer of a revoked namespace and then fails, which
+	// would break the whole reconcile.
+	svcList := &core_v1.ServiceList{}
+	if err := cache.ListReadable(ctx, kubeCache, in.conf, in.kialiCache, cluster, svcList); err != nil {
 		return false, nil, fmt.Errorf("unable to list services for cluster [%s]: %w", cluster, err)
 	}
 	vInfo.clusterInfo.services = svcList.Items
 	vInfo.clusterInfo.kubeServiceHosts = kubernetes.NewKubeServiceHostsWithNamespaceDefaults(svcList.Items, vInfo.clusterInfo.identityDomain, buildNamespaceToExportTo(vInfo.mesh, cluster, svcList.Items))
 
-	var depList apps_v1.DeploymentList
-	if err := kubeCache.List(ctx, &depList, &client.ListOptions{}); err != nil {
+	depList := &apps_v1.DeploymentList{}
+	if err := cache.ListReadable(ctx, kubeCache, in.conf, in.kialiCache, cluster, depList); err != nil {
 		return false, nil, fmt.Errorf("unable to list deployments for cluster [%s]: %w", cluster, err)
 	}
 	vInfo.clusterInfo.deployments = depList.Items
 
 	// grab all config for the cluster
-	criteria := IstioConfigCriteria{
-		IncludeAuthorizationPolicies:  true,
-		IncludeDestinationRules:       true,
-		IncludeGateways:               true,
-		IncludeK8sGateways:            true,
-		IncludeK8sGRPCRoutes:          true,
-		IncludeK8sHTTPRoutes:          true,
-		IncludeK8sInferencePools:      true,
-		IncludeK8sReferenceGrants:     true,
-		IncludePeerAuthentications:    true,
-		IncludeRequestAuthentications: true,
-		IncludeServiceEntries:         true,
-		IncludeSidecars:               true,
-		IncludeTelemetry:              true,
-		IncludeVirtualServices:        true,
-		IncludeWasmPlugins:            true,
-		IncludeWorkloadEntries:        true,
-		IncludeWorkloadGroups:         true,
-	}
+	criteria := allIstioConfigCriteria()
 	// Raw SA-wide fetch, like ValidateIstioObject below: the background
 	// reconciler must not run the per-user list RBAC filter. Its "user" is
 	// the service account, so the SSARs would always ask for the SA's own
 	// permissions and their verdicts would fail closed into the shared
-	// validation cache. filterIstioConfigByManagedNamespaces scopes the
-	// result to the managed namespaces.
-	istioConfigList, err := in.istioConfig.getIstioConfigList(ctx, cluster, meta_v1.NamespaceAll, criteria)
+	// validation cache. cache.ReadableNamespaces is the SA-wide scope in
+	// both access modes (nil = cluster-wide in cluster-wide access;
+	// the readable namespaces otherwise), and
+	// filterIstioConfigByManagedNamespaces scopes the result to the
+	// managed namespaces.
+	istioConfigList, err := in.istioConfig.getIstioConfigList(ctx, cluster, cache.ReadableNamespaces(in.conf, in.kialiCache, cluster), criteria)
 	if err != nil {
 		return false, nil, err
 	}
@@ -966,38 +978,24 @@ func (in *IstioValidationsService) ValidateIstioObject(ctx context.Context, clus
 	if err != nil {
 		return nil, istioReferences, fmt.Errorf("unable to get kube cache for cluster [%s]: %w", cluster, err)
 	}
-	var svcList core_v1.ServiceList
-	if err := kubeCache.List(ctx, &svcList, &client.ListOptions{}); err != nil {
+	// Same per-namespace listing as Validate: an all-namespace list would stall on a
+	// never-syncing informer.
+	svcList := &core_v1.ServiceList{}
+	if err := cache.ListReadable(ctx, kubeCache, in.conf, in.kialiCache, cluster, svcList); err != nil {
 		return nil, istioReferences, fmt.Errorf("unable to list services for cluster [%s]: %w", cluster, err)
 	}
 	vInfo.clusterInfo.services = svcList.Items
 	vInfo.clusterInfo.kubeServiceHosts = kubernetes.NewKubeServiceHostsWithNamespaceDefaults(svcList.Items, vInfo.clusterInfo.identityDomain, buildNamespaceToExportTo(vInfo.mesh, cluster, svcList.Items))
 
-	criteria := IstioConfigCriteria{
-		IncludeAuthorizationPolicies:  true,
-		IncludeDestinationRules:       true,
-		IncludeGateways:               true,
-		IncludeK8sGateways:            true,
-		IncludeK8sGRPCRoutes:          true,
-		IncludeK8sHTTPRoutes:          true,
-		IncludeK8sInferencePools:      true,
-		IncludeK8sReferenceGrants:     true,
-		IncludePeerAuthentications:    true,
-		IncludeRequestAuthentications: true,
-		IncludeServiceEntries:         true,
-		IncludeSidecars:               true,
-		IncludeTelemetry:              true,
-		IncludeVirtualServices:        true,
-		IncludeWasmPlugins:            true,
-		IncludeWorkloadEntries:        true,
-		IncludeWorkloadGroups:         true,
-	}
+	criteria := allIstioConfigCriteria()
 	// The raw, unfiltered config fetch: GetIstioConfigList filters its
 	// result by the requesting user's accessible namespaces, which would
 	// hide cross-namespace conflicts from the checkers (the same divergence
 	// the SA visibility above fixes for the namespace and workload maps).
 	// The per-user pruning at the end of this function narrows the response.
-	clusterIstioConfigList, err := in.istioConfig.getIstioConfigList(ctx, cluster, meta_v1.NamespaceAll, criteria)
+	// getIstioConfigList keeps that SA-wide view while still listing per
+	// readable namespace, like the service fetch above.
+	clusterIstioConfigList, err := in.istioConfig.getIstioConfigList(ctx, cluster, cache.ReadableNamespaces(in.conf, in.kialiCache, cluster), criteria)
 	if err != nil {
 		return nil, istioReferences, err
 	}

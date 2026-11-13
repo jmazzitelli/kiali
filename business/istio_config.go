@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -192,7 +193,13 @@ func (in *IstioConfigService) GetIstioConfigListForNamespace(ctx context.Context
 		return nil, err
 	}
 
-	istioConfigs, err := in.getIstioConfigList(ctx, cluster, namespace, criteria)
+	// A partially-revoked namespace serves stale informer data; serve the empty list
+	// instead of frozen pre-revocation config.
+	if slices.Contains(in.kialiCache.RevokedNamespaces(cluster), namespace) {
+		return &models.IstioConfigList{}, nil
+	}
+
+	istioConfigs, err := in.getIstioConfigList(ctx, cluster, []string{namespace}, criteria)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +217,10 @@ func ToPtrs[T any](s []T) []*T {
 	return ret
 }
 
-func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster string, namespace string, criteria IstioConfigCriteria) (*models.IstioConfigList, error) {
-	istioConfigList := &models.IstioConfigList{
+// newIstioConfigList returns a list with every field initialized to an empty slice: the
+// API must not serialize nil arrays (the frontend breaks on "null").
+func newIstioConfigList() *models.IstioConfigList {
+	return &models.IstioConfigList{
 		DestinationRules:  []*networking_v1.DestinationRule{},
 		EnvoyFilters:      []*networking_v1alpha3.EnvoyFilter{},
 		Gateways:          []*networking_v1.Gateway{},
@@ -237,6 +246,23 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 		PeerAuthentications:    []*security_v1.PeerAuthentication{},
 		RequestAuthentications: []*security_v1.RequestAuthentication{},
 	}
+}
+
+// getIstioConfigList fetches the criteria's objects from the SA-backed cache across the
+// given namespaces, without any per-user filtering: callers that need the user's view
+// (GetIstioConfigList) prune the result themselves, and the validation checkers need the
+// SA-wide view to catch cross-namespace conflicts.
+//
+// A nil namespaces list is the one remaining "nil means cluster-wide" convention, kept
+// because the cluster-wide branch must wrap all 22 per-type lists below. It has exactly
+// three callers, all correct: GetIstioConfigList and ValidateIstioObject pass
+// cache.ReadableNamespaces (whose nil is the cluster-wide-access signal), and
+// GetIstioConfigListForNamespace passes a one-element slice. A new caller must never
+// build the list by hand - a nil built carelessly here would list across all namespaces
+// and stall on the never-syncing informer of a revoked namespace. Pass
+// cache.ReadableNamespaces's result, or an explicit []string{...}.
+func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster string, namespaces []string, criteria IstioConfigCriteria) (*models.IstioConfigList, error) {
+	istioConfigList := newIstioConfigList()
 
 	// This is called from many places but should be ignored for an external kiali home cluster. It's easier to check here
 	// than at all of the callers. If not applicable, just return.
@@ -264,7 +290,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	kubeCache, err := in.kialiCache.GetKubeCache(cluster)
 	if err != nil {
-		return nil, fmt.Errorf("K8s Cache [%s] is not found or is not accessible for Kiali", cluster)
+		return nil, fmt.Errorf("K8s Cache [%s] is not found or is not accessible for Kiali: %w", cluster, err)
 	}
 
 	userClient := in.userClients[cluster]
@@ -289,11 +315,20 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 	if err != nil {
 		return nil, fmt.Errorf("bad selector: %s", err)
 	}
-	listOpts := []client.ListOption{client.MatchingLabels(selector), client.InNamespace(namespace)}
+	listOpts := []client.ListOption{client.MatchingLabels(selector)}
+	// Resolve the nil convention once, so the closure below reads a plain bool.
+	clusterWide := namespaces == nil
+	listAcross := func(list client.ObjectList) error {
+		if clusterWide {
+			// Cluster-wide access: a single cluster-scoped informer serves the list.
+			return cache.ListClusterWide(ctx, kubeCache, list, listOpts...)
+		}
+		return cache.ListInNamespaces(ctx, kubeCache, namespaces, list, listOpts...)
+	}
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.DestinationRules) {
 		list := &networking_v1.DestinationRuleList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -304,7 +339,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.EnvoyFilters) {
 		list := &networking_v1alpha3.EnvoyFilterList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -318,7 +353,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && saClient.IsIstioGateway() && criteria.Include(kubernetes.Gateways) {
 		list := &networking_v1.GatewayList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -333,7 +368,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && criteria.Include(kubernetes.K8sGateways) {
 		list := &k8s_networking_v1.GatewayList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -344,7 +379,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && criteria.Include(kubernetes.K8sGRPCRoutes) {
 		list := &k8s_networking_v1.GRPCRouteList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -355,7 +390,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && criteria.Include(kubernetes.K8sHTTPRoutes) {
 		list := &k8s_networking_v1.HTTPRouteList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -366,7 +401,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsInferenceAPI() && criteria.Include(kubernetes.K8sInferencePools) {
 		list := &k8s_inference_v1.InferencePoolList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -380,7 +415,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && criteria.Include(kubernetes.K8sReferenceGrants) {
 		list := &k8s_networking_v1beta1.ReferenceGrantList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -391,7 +426,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && saClient.HasTCPRouteInV1() && criteria.Include(kubernetes.K8sTCPRoutes) {
 		list := &k8s_networking_v1.TCPRouteList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -402,7 +437,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && saClient.HasTLSRouteInV1() && criteria.Include(kubernetes.K8sTLSRoutes) {
 		list := &k8s_networking_v1.TLSRouteList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -413,7 +448,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsGatewayAPI() && saClient.HasUDPRouteInV1() && criteria.Include(kubernetes.K8sUDPRoutes) {
 		list := &k8s_networking_v1.UDPRouteList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -424,7 +459,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.ServiceEntries) {
 		list := &networking_v1.ServiceEntryList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -435,7 +470,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.Sidecars) {
 		list := &networking_v1.SidecarList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -450,7 +485,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.VirtualServices) {
 		list := &networking_v1.VirtualServiceList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -461,7 +496,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.WorkloadEntries) {
 		list := &networking_v1.WorkloadEntryList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -472,7 +507,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.WorkloadGroups) {
 		list := &networking_v1.WorkloadGroupList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -490,7 +525,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 	// error; skip it gracefully so older Istio versions keep working.
 	if saClient.IsIstioAPI() && criteria.Include(kubernetes.TrafficExtensions) {
 		list := &extentions_v1alpha1.TrafficExtensionList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			if !api_meta.IsNoMatchError(err) {
 				return nil, err
 			}
@@ -505,7 +540,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if criteria.Include(kubernetes.WasmPlugins) {
 		list := &extentions_v1alpha1.WasmPluginList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -516,7 +551,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if criteria.Include(kubernetes.Telemetries) {
 		list := &telemetry_v1.TelemetryList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -527,7 +562,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if criteria.Include(kubernetes.AuthorizationPolicies) {
 		list := &security_v1.AuthorizationPolicyList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -542,7 +577,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if criteria.Include(kubernetes.PeerAuthentications) {
 		list := &security_v1.PeerAuthenticationList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -557,7 +592,7 @@ func (in *IstioConfigService) getIstioConfigList(ctx context.Context, cluster st
 
 	if criteria.Include(kubernetes.RequestAuthentications) {
 		list := &security_v1.RequestAuthenticationList{}
-		if err := kubeCache.List(ctx, list, listOpts...); err != nil {
+		if err := listAcross(list); err != nil {
 			return nil, err
 		}
 		if err := kubernetes.EnsureTypeMeta(list); err != nil {
@@ -768,7 +803,7 @@ func (in *IstioConfigService) GetIstioConfigList(ctx context.Context, cluster st
 	)
 	defer end()
 
-	istioConfigs, err := in.getIstioConfigList(ctx, cluster, meta_v1.NamespaceAll, criteria)
+	istioConfigs, err := in.getIstioConfigList(ctx, cluster, cache.ReadableNamespaces(in.conf, in.kialiCache, cluster), criteria)
 	if err != nil {
 		return nil, err
 	}
@@ -783,7 +818,6 @@ func (in *IstioConfigService) GetIstioConfigList(ctx context.Context, cluster st
 	for _, namespace := range namespaces {
 		namespaceNames = append(namespaceNames, namespace.Name)
 	}
-
 	istioConfigs.AuthorizationPolicies = kubernetes.FilterByNamespaceNames(istioConfigs.AuthorizationPolicies, namespaceNames)
 	istioConfigs.DestinationRules = kubernetes.FilterByNamespaceNames(istioConfigs.DestinationRules, namespaceNames)
 	istioConfigs.EnvoyFilters = kubernetes.FilterByNamespaceNames(istioConfigs.EnvoyFilters, namespaceNames)
